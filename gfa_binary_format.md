@@ -192,8 +192,7 @@ The following is the sequence of fields making up the header.
 | `section_id`                    | Section type (3 = links)                               | `uint8`  |
 | `record_num`                    | number of records in the block                         | `uint16` |
 | **From/To field**               |                                                        |          |
-| `compression_from`              | Encoding strategy for the from  fields                 | `uint8`  |
-| `compression_to`                | Encoding strategy for the to fields                    | `uint8`  |
+| `compression_fromto`            | Encoding strategy for the from/to fields               | `uint16` |
 | `compressed_fromto_len`         | length of compressed from/to payload (metadata + blob) | `uint64` |
 | **CIGAR field**                 |                                                        |          |
 | `compression_links_cigars`      | Encoding strategy for the cigar strings (4 bytes)      | `uint32` |

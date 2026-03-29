@@ -88,7 +88,7 @@ The BGFA format uses strategy codes to specify encoding methods. The code size d
 | Integer-only | 1 byte    | `[method]`                               | `0x01`       | Pure integer lists |
 | Strings      | 2 bytes   | `(int_method << 8) | str_method`         | `0x0102`     | String lists       |
 | CIGAR        | 4 bytes   | `(decomp<<24)|(int1<<16)|(int2<<8)|ops`  | `0x01020304` | CIGAR strings only |
-| Walks/Paths  | 4 bytes   | `(decomp<<24)|(reserved<<16)|(int<<8)|0` | `0x02000000` | Walks and Paths    |
+| Walks/Paths  | 4 bytes   | `(decomp<<24)|(reserved<<16)|(int<<8)|0` | `0x02000100` | Walks and Paths    |
 
 **Key distinction:**
 - **2-byte codes** (0x0000-0x0BFF): Used for simple string/integer lists where the high byte specifies integer encoding and the low byte specifies string encoding
@@ -97,16 +97,16 @@ The BGFA format uses strategy codes to specify encoding methods. The code size d
   - Byte 2 (bits 16-23): Reserved (must be 0x00) or first integer encoding strategy
   - Byte 3 (bits 8-15): Second integer encoding strategy or string encoding strategy
   - Low byte (bits 0-7): String encoding strategy (when applicable)
-  
+
 **Example interpretation:**
 - For 2-byte string code `0x0102` (value `0x0102`, LE uint16 = bytes `02 01` in file):
   - High byte: `0x01` (varint encoding for lengths/positions)
   - Low byte: `0x02` (fixed16 encoding for the string blob)
-  
-- For 4-byte walks code `0x02000000` (value `0x02000000`, LE uint32 = bytes `00 00 00 02` in file):
+
+- For 4-byte walks code `0x02000100` (value `0x02000100`, LE uint32 = bytes `00 01 00 02` in file):
   - High byte: `0x02` (orientation + numid decomposition)
   - Byte 2: `0x00` (reserved)
-  - Byte 3: `0x00` (varint encoding for segment IDs)
+  - Byte 3: `0x01` (varint encoding for segment IDs)
   - Low byte: `0x00` (no encoding for string data)
 
 **File byte order example:** A 2-byte code with value `0x0102` is stored as a little-endian uint16, so the physical bytes in the file are `02 01` (low byte first). The "Integer Structure" column above shows how to construct the integer value from the component bytes.
@@ -949,8 +949,7 @@ Payload:
 00             # from_orientation: bits [0, 0] = 0x00 (both +)
 02             # to_orientation: bits [0, 1] = 0x02 (first +, second -)
 04 03          # cigar lengths: 4, 3 (varint)
-34 4D 34 4D    # cigar blob: "4M4M" (first 3 bytes used, last is padding)
-33 4D 00       # cigar blob continued: "3M" + padding
+34 4D 33 4D    # cigar blob: "4M3M"
 ```
 
 **Total file size:** ~100 bytes
@@ -1038,8 +1037,7 @@ Payload:
 00             # from_orientation: bits [0, 0] = 0x00 (both +)
 02             # to_orientation: bits [0, 1] = 0x02 (first +, second -)
 04 03          # cigar lengths: 4, 3 (varint)
-34 4D 34 4D    # cigar blob: "4M4M" (first 3 bytes used, last is padding)
-33 4D 00       # cigar blob continued: "3M" + padding
+34 4D 33 4D    # cigar blob: "4M3M"
 ```
 
 **Paths Block (section_id = 4):**
@@ -1051,9 +1049,9 @@ Header:
 01 00          # compression_path_names: 0x0001 (varint lengths, none for blob)
 06 00 00 00    # compressed_path_names_len: 6 bytes (1 varint length + 5 ASCII)
 05 00 00 00    # uncompressed_path_names_len: 5 bytes
-00 00 00 02    # compression_paths: 0x02000000 (orientation + numid, varint for segment IDs, none for string)
-00 00 00 00    # compressed_paths_len: 0 bytes
-00 00 00 00    # uncompressed_paths_len: 0 bytes
+00 01 00 02    # compression_paths: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
+05 00 00 00    # compressed_paths_len: 5 bytes (1 varint length + 3 varint segment IDs + 1 byte orientations)
+03 00 00 00    # uncompressed_paths_len: 3 segment occurrences
 00 00 00 01    # compression_cigars: 0x01000000 (identity decomposition, varint lengths, raw CIGAR string blob)
 06 00 00 00    # compressed_len_cigar: 6 bytes (2 varint lengths + 4 ASCII)
 04 00 00 00    # uncompressed_len_cigar: 4 bytes (length of "4M3M")
@@ -1067,7 +1065,7 @@ Payload - Path Names (concatenation with varint lengths):
 
 Payload - Paths (walks type with orientation + numid):
 ```
-04             # walks_lengths: [4] (varint)
+03             # walks_lengths: [3] (varint, 1 path with 3 segments)
 01 02 03       # walks_segments: [1, 2, 3] (segment IDs as varint)
 02             # walks_orientations: bits [0, 1, 0] LSB-first = 0x02 (+,-,+)
 ```
@@ -1099,7 +1097,7 @@ Header:
 01 00          # compression_end_positions: 0x0001 (varint)
 01 00 00 00    # compressed_end_positions_len: 1 byte (1 varint)
 01 00 00 00    # uncompressed_end_positions_len: 1 byte
-00 00 00 02    # compression_walks: 0x02000000 (orientation + numid, varint for segment IDs, none for string)
+00 01 00 02    # compression_walks: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
 10 00 00 00    # compressed_walk_len: 16 bytes (1 varint length + 7 varint segment IDs + 8 bytes orientations)
 07 00 00 00    # uncompressed_walk_len: 7 segment occurrences
 ```

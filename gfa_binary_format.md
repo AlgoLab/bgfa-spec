@@ -1,5 +1,32 @@
 # Binary GFA format
 
+## Table of Contents
+
+- [Binary GFA file: overall structure](#binary-gfa-file-overall-structure)
+- [Conventions](#conventions)
+  - [Strategy Code Format Summary](#strategy-code-format-summary)
+  - [Terminology](#terminology)
+  - [File Header Section](#file-header-section)
+  - [Segments Block](#segments-block)
+  - [Links Block](#links-block)
+  - [Paths Block](#paths-block)
+  - [Walks Block](#walks-block)
+- [Walks Type Format](#walks-type-format)
+- [Strings Encoding strategies](#strings-encoding-strategies)
+- [Integer Encoding Algorithms](#integer-encoding-algorithms)
+- [Bits](#bits)
+- [Arithmetic Coding](#arithmetic-coding-0x06)
+- [Huffman Coding](#huffman-coding-0x04-0xf4)
+- [BWT + Huffman encoding](#bwt--huffman-encoding-0x07)
+- [2-bit DNA Encoding](#2-bit-dna-encoding-0x05)
+- [Run-Length Encoding - RLE](#run-length-encoding---rle-0x08)
+- [Dictionary Encoding](#dictionary-encoding-0x0a)
+- [CIGAR-Specific Encoding](#cigar-specific-encoding-0x09)
+- [CIGAR 4-byte Strategy Codes](#cigar-4-byte-strategy-codes)
+- [Walks and Paths 4-byte Strategy Codes](#walks-and-paths-4-byte-strategy-codes)
+- [Conformance Requirements](#conformance-requirements)
+- [Appendix A: Example BGFA Files](#appendix-a-example-bgfa-files)
+
 ## Binary GFA file: overall structure
 
 We divide the file into the following parts.
@@ -10,7 +37,7 @@ All other parts are a list of blocks. There can be several blocks of the same ty
 *  List of Blocks (segments, links, paths, walks)
 
 Each block contains a `section_id` field that identifies its type, allowing blocks
-to appear in any order in the file. 
+to appear in any order in the file.
 
 ### Section IDs Reference
 
@@ -39,7 +66,7 @@ the final byte of the bitstream are set to 0 (when writing) and MUST be ignored 
 
 ## Conventions
 
-**C strings:** The reference to C strings (ASCII terminated by `\0`) is for context only. 
+**C strings:** The reference to C strings (ASCII terminated by `\0`) is for context only.
 Input strings to the `strings` type do NOT include null terminators. Strings are stored as raw ASCII bytes without termination.
 
 **Type definitions:**
@@ -94,6 +121,17 @@ Readers MUST skip unknown section IDs without error.
 - **Payload:** The encoded data portion of a block, following the header.
 - **Metadata:** The integer lists (lengths, positions) prepended to the compressed blob within a payload, used to decode the blob.
 
+### How to Read a Block
+
+To read a block from a BGFA file, a reader follows these steps:
+
+1. **Read the block header**: Parse the `section_id` (1 byte) to determine the block type, then parse the remaining header fields according to the block type's header layout.
+2. **Determine payload size**: The total payload size is the sum of all `compressed_*_len` fields in the header. Each `compressed_*_len` includes both the integer metadata list and the compressed blob for that field.
+3. **Parse each payload field**: For each field, read the metadata (integer list encoded per the first-byte strategy), then read the blob (encoded per the second-byte strategy). The metadata provides the information needed to decode the blob (e.g., string lengths, positions).
+4. **Reconstruct data**: Use the metadata and strategy codes to decode each field back to its original form.
+
+**Key principle:** Every `compressed_*_len` field in the header tells you exactly how many bytes to read for its corresponding payload field. The reader sums these to find the total payload boundary, then processes each field sequentially within the payload.
+
 ### File Header Section
 
 | Field          | Description                                             | Type                      |
@@ -138,7 +176,7 @@ The length of the uncompressed segment names does not include any terminator cha
 | `segment_names`   | Segment names     | `strings` |
 | `sequences`       | Segment sequences | `strings` |
 
-**Layout:** The payload consists of encoded segment names followed by encoded sequences. 
+**Layout:** The payload consists of encoded segment names followed by encoded sequences.
 We have two distinct encoding strategies.
 
 ### Links Block
@@ -299,12 +337,32 @@ This would be encoded as:
 - `walks_orientations`: [0, 1, 0] (0=+, 1=- for each segment, packed as bits)
 
 
+## Superstring and Concatenation Encoding
+
+The `strings` type supports two encoding modes for combining multiple strings into a single blob:
+
+**Concatenation:** All strings are concatenated end-to-end into a single byte sequence. The metadata stores the length of each string. To recover string *i*, the decoder reads `length[i]` bytes from the cumulative offset.
+
+**Superstring:** All strings are embedded within a single "superstring" constructed by a heuristic that minimizes total length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string *i*, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
+
+Both modes use the same 2-byte strategy code: the first byte encodes the integer strategy for the metadata (lengths or positions), and the second byte encodes the compression strategy for the blob.
+
+## Walks and Paths: Type Note
+
+Both the Walks and Paths blocks use the `walks` type to encode sequences of oriented segment IDs. The encoding is identical in both cases: a list of walks, where each walk is a sequence of segment IDs with orientations.
+
+The key difference is in the surrounding metadata:
+- **Walks block**: Each walk is associated with sample ID, haplotype, sequence ID, and positional metadata.
+- **Paths block**: Each walk is associated with a path name and optional CIGAR strings.
+
+The `compression_walks` (Walks block) and `compression_paths` (Paths block) fields both use 4-byte strategy codes from the [Walks and Paths 4-byte Strategy Codes](#walks-and-paths-4-byte-strategy-codes) section.
+
 ## Strings Encoding strategies
 
 When we have to encode a list of strings (the `strings` type), we choose the encoding strategy with a code consisting of
 two bytes.
 
-The first byte (high byte) encodes the strategy for a sequence of uints, which are 
+The first byte (high byte) encodes the strategy for a sequence of uints, which are
 the starting and ending position of the strings within a superstring of all
 strings, without the terminator character `\0`.
 
@@ -345,7 +403,7 @@ We use question marks `??` to represent that all values of the byte can be used.
 | `0x??0E` | PPM             | `string` |
 
 The superstring is computed with an heuristic that tries to minimize the length of the superstring of all strings, after removing the `\0`
-character that ends them. 
+character that ends them.
 
 ## Integer Encoding Algorithms
 
@@ -534,7 +592,7 @@ The decoder MUST reconstruct the Huffman codes from the 16 bit-lengths using can
    code = 0
    prev_len = 0
    huffman_codes = {}  # symbol -> (code, bit_length)
-   
+
    for symbol, bit_len in sorted_pairs:
        # Left-shift to account for increased bit length
        code = (code + 1) << (bit_len - prev_len) if prev_len > 0 else 0

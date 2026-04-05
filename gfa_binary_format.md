@@ -33,21 +33,21 @@ We divide the file into the following parts.
 The first part is the file header, which contains some metadata.
 All other parts are a list of blocks. There can be several blocks of the same type.
 
-*  File Header
-*  List of Blocks (segments, links, paths, walks)
+- File Header
+- List of Blocks (segments, links, paths, walks)
 
 Each block contains a `section_id` field that identifies its type, allowing blocks
 to appear in any order in the file.
 
 ### Section IDs Reference
 
-| ID   | Block Type | Description                                          |
-|------|------------|------------------------------------------------------|
-| 1    | Reserved   | Formerly Segment Names; merged into Segments block   |
-| 2    | Segments   | Segment names and sequences                          |
-| 3    | Links      | Link connections and CIGAR alignments                |
-| 4    | Paths      | Paths with oriented segment IDs and CIGAR strings    |
-| 5    | Walks      | Walks with sample/haplotype metadata and orientations|
+| ID  | Block Type | Description                                           |
+| --- | ---------- | ----------------------------------------------------- |
+| 1   | Reserved   | Formerly Segment Names; merged into Segments block    |
+| 2   | Segments   | Segment names and sequences                           |
+| 3   | Links      | Link connections and CIGAR alignments                 |
+| 4   | Paths      | Paths with oriented segment IDs and CIGAR strings     |
+| 5   | Walks      | Walks with sample/haplotype metadata and orientations |
 
 Each block has a header and a payload.
 The payloads begin with all integer metadata required for the strategy, followed by the compressed data blob.
@@ -57,7 +57,7 @@ The payloads begin with all integer metadata required for the strategy, followed
 - Blocks of the same type are not required to be contiguous
 - Different section types can appear in any order relative to each other.
 
-**Endianness:** All multi-byte integer fields (`uint16`, `uint32`, `uint64`) are encoded in little-endian format.
+**Endianness:** All multi-byte integer fields (`uint16`, `uint32`, `uint64`) are encoded in little-endian format. Strategy codes and other byte sequences have no endianness considerations as they are simple sequences of bytes.
 
 **Alignment:** All fields begin at the next byte boundary after the previous field. No inter-field padding is applied. Fields are packed contiguously without gaps.
 
@@ -71,47 +71,153 @@ Input strings to the `strings` type do NOT include null terminators. Strings are
 
 **Type definitions:**
 
-- `uints`: A list of unsigned integers encoded according to the specified integer encoding strategy (see "Integer Encoding Algorithms" section, lines 337-428).
-- `strings`: A list of strings encoded according to the string encoding strategy (see "Strings Encoding strategies" section, lines 302-353).
-- `bits`: A list of bits packed into uint64 words (see "Bits" section, lines 481-510).
-- `walks`: A list of walks, where each walk is a sequence of oriented segment IDs (see "Walks Type Format" section, lines 257-290).
+- `uints`: A list of unsigned integers encoded according to the specified integer encoding strategy (see [Integer Encoding Algorithms](#integer-encoding-algorithms)).
+- `strings`: A list of strings encoded according to the string encoding strategy (see [Strings Encoding strategies](#strings-encoding-strategies)).
+- `bits`: A list of bits packed into uint64 words (see [Bits](#bits)).
+- `walks`: A list of walks, where each walk is a sequence of oriented segment IDs (see [Walks Type Format](#walks-type-format)).
 - `bytes`: A raw byte sequence.
 
 ### Strategy Code Format Summary
 
-The BGFA format uses strategy codes to specify encoding methods. The code size depends on what is being encoded.
+The BGFA format uses strategy codes to specify encoding methods. Strategy codes are simple sequences of bytes with no endianness considerations. The code size depends on what is being encoded.
 
-**Storage:** Strategy codes are stored as little-endian multi-byte integers. The integer value is constructed by placing the first byte listed below in the high-order position, the second byte in the next position, and so on. The resulting integer is written in little-endian byte order.
+#### Byte-by-Byte Strategy Code Formats
 
-| Type         | Code Size | Integer Structure                        | Example      | Used For           |
-|--------------|-----------|------------------------------------------|--------------|--------------------|
-| Integer-only | 1 byte    | `[method]`                               | `0x01`       | Pure integer lists |
-| Strings      | 2 bytes   | `(int_method << 8) | str_method`         | `0x0102`     | String lists       |
-| CIGAR        | 4 bytes   | `(decomp<<24)|(int1<<16)|(int2<<8)|ops`  | `0x01020304` | CIGAR strings only |
-| Walks/Paths  | 4 bytes   | `(decomp<<24)|(reserved<<16)|(int<<8)|0` | `0x02000100` | Walks and Paths    |
+**1-byte Strategy Codes (Integer-only):**
 
-**Key distinction:**
-- **2-byte codes** (0x0000-0x0BFF): Used for simple string/integer lists where the high byte specifies integer encoding and the low byte specifies string encoding
-- **4-byte codes** (0x010000-0x02FFFF): Used for structured data requiring decomposition where:
-  - High byte (bits 24-31): Decomposition strategy (how to split the data)
-  - Byte 2 (bits 16-23): Reserved (must be 0x00) or first integer encoding strategy
-  - Byte 3 (bits 8-15): Second integer encoding strategy or string encoding strategy
-  - Low byte (bits 0-7): String encoding strategy (when applicable)
+```
+Format: 0xMM
+Bytes: [MM]
+```
 
-**Example interpretation:**
-- For 2-byte string code `0x0102` (value `0x0102`, LE uint16 = bytes `02 01` in file):
-  - High byte: `0x01` (varint encoding for lengths/positions)
-  - Low byte: `0x02` (fixed16 encoding for the string blob)
+- `MM`: Integer encoding method (0x00-0x0B)
+- Used for: Pure integer lists
+- Examples:
+  - `0x01` = Varint encoding
+  - `0x02` = Fixed16 encoding
 
-- For 4-byte walks code `0x02000100` (value `0x02000100`, LE uint32 = bytes `00 01 00 02` in file):
-  - High byte: `0x02` (orientation + numid decomposition)
-  - Byte 2: `0x00` (reserved)
-  - Byte 3: `0x01` (varint encoding for segment IDs)
-  - Low byte: `0x00` (no encoding for string data)
+**2-byte Strategy Codes (Strings):**
 
-**File byte order example:** A 2-byte code with value `0x0102` is stored as a little-endian uint16, so the physical bytes in the file are `02 01` (low byte first). The "Integer Structure" column above shows how to construct the integer value from the component bytes.
+```
+Format: 0xHHLL
+Bytes: [HH, LL]
+```
 
-Readers MUST skip unknown section IDs without error.
+- `HH`: Integer encoding method for metadata (lengths/positions)
+- `LL`: String encoding method for blob
+- Used for: String lists
+- Examples:
+  - `0x0102` = Bytes `[01, 02]` (Varint metadata + Fixed16 blob)
+  - `0x0304` = Bytes `[03, 04]` (Delta metadata + LZMA blob)
+
+**4-byte Strategy Codes (CIGAR):**
+
+```
+Format: 0xDDRRIISS
+Bytes: [DD, RR, II, SS]
+```
+
+- `DD`: Decomposition strategy
+- `RR`: Reserved (must be 0x00)
+- `II`: Integer encoding method
+- `SS`: String encoding method
+- Used for: CIGAR strings
+- Example:
+  - `0x01000100` = Bytes `[01, 00, 01, 00]` (Identity decomposition, Varint integers, None for strings)
+
+**4-byte Strategy Codes (Walks/Paths):**
+
+```
+Format: 0xDD00IISS
+Bytes: [DD, 00, II, SS]
+```
+
+- `DD`: Decomposition (0x01=orientation+strid, 0x02=orientation+numid)
+- `00`: Reserved (must be 0x00)
+- `II`: Integer encoding method (for numid) OR
+- `SS`: String encoding method (for strid)
+- Used for: Walks and Paths
+- Example:
+  - `0x02000100` = Bytes `[02, 00, 01, 00]` (Orientation+numid, Varint integers)
+
+#### Strategy Code Reference Table
+
+| Code Type    | Format       | Bytes              | First | Second | Third | Fourth |
+| ------------ | ------------ | ------------------ | ----- | ------ | ----- | ------ |
+| Integer-only | `0xMM`       | `[MM]`             | `MM`  | -      | -     | -      |
+| Strings      | `0xHHLL`     | `[HH, LL]`         | `HH`  | `LL`   | -     | -      |
+| CIGAR        | `0xDDRRIISS` | `[DD, RR, II, SS]` | `DD`  | `RR`   | `II`  | `SS`   |
+| Walks/Paths  | `0xDD00IISS` | `[DD, 00, II, SS]` | `DD`  | `00`   | `II`  | `SS`   |
+
+**Key distinctions:**
+
+- **2-byte codes**: Used for simple string/integer lists where the first byte specifies the integer encoding strategy and the second byte specifies the string encoding strategy
+- **4-byte codes**: Used for structured data requiring decomposition where the first byte specifies the decomposition strategy and the remaining bytes specify encoding strategies for different components
+
+**Reader requirements:**
+
+- Readers MUST interpret strategy codes as simple byte sequences
+- Readers MUST validate that reserved bytes in strategy codes are `0x00`
+- Readers MUST validate that strategy code byte patterns match the defined formats
+- Readers MUST skip unknown section IDs without error
+- Readers MUST treat unknown or invalid strategy codes as fatal errors
+
+**Error recovery guidance:**
+
+When encountering malformed data, readers should:
+
+1. **Invalid strategy codes**: Treat as fatal errors (cannot recover)
+2. **Corrupted payloads**: Skip the entire block if payload size can be determined from header
+3. **Truncated files**: Report error with bytes read vs expected
+4. **Unknown section IDs**: Skip the block using header size information
+5. **Checksum failures**: Treat as fatal errors if checksums are implemented
+
+**Performance considerations:**
+
+Different encoding strategies offer tradeoffs between compression ratio and speed:
+
+- **Fastest decompression**: Identity (`0x00??`), 2-bit DNA (`0x??05`)
+- **Best compression**: BWT+Huffman (`0x??07`), Dictionary (`0x??0A`)
+- **Balanced approach**: Huffman (`0x??04`), Zstd (`0x??01`)
+- **Specialized**: CIGAR-specific (`0x??09`), Delta (`0x03??`) for sorted data
+
+**Implementation recommendations:**
+
+1. **Memory-mapped I/O**: Useful for random access to large BGFA files
+2. **Streaming processing**: Process blocks sequentially for memory efficiency
+3. **Parallel decompression**: Different blocks can be decompressed in parallel
+4. **Caching**: Cache frequently accessed strategy code validations
+
+**Strategy code validation examples:**
+
+```python
+# Valid 2-byte strategy code
+def is_valid_2byte_strategy(code_bytes):
+    if len(code_bytes) != 2:
+        return False
+    first_byte, second_byte = code_bytes
+    # Check that bytes are within valid ranges
+    return (0x00 <= first_byte <= 0x0B) and (0x00 <= second_byte <= 0x0E)
+
+# Valid 4-byte CIGAR strategy code
+def is_valid_4byte_cigar_strategy(code_bytes):
+    if len(code_bytes) != 4:
+        return False
+    dd, rr, ii, ss = code_bytes
+    # Check decomposition strategy
+    if dd not in [0x00, 0x01, 0x02]:
+        return False
+    # Check reserved byte
+    if dd != 0x00 and rr != 0x00:  # For non-identity, RR must be 0x00
+        return False
+    # Check integer encoding strategies
+    if ii not in [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B]:
+        return False
+    # Check string encoding strategies
+    if ss not in [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0C, 0x0D, 0x0E]:
+        return False
+    return True
+```
 
 ### Terminology
 
@@ -135,7 +241,7 @@ To read a block from a BGFA file, a reader follows these steps:
 ### File Header Section
 
 | Field          | Description                                             | Type                      |
-|----------------|---------------------------------------------------------|---------------------------|
+| -------------- | ------------------------------------------------------- | ------------------------- |
 | `magic_number` | Magic number for bgfa files = "BGFA" (0x41464742)       | `uint32`                  |
 | `version`      | Format version (progressive number, starts at 0)        | `uint16`                  |
 | `header_len`   | length of the header string (excluding null terminator) | `uint16`                  |
@@ -156,25 +262,25 @@ incrementing integer starting at 0. Segment IDs are assigned in the order segmen
 
 #### Header
 
-| Field                            | Description                                                 | Type     |
-|----------------------------------|-------------------------------------------------------------|----------|
-| `section_id`                     | Section type (2 = segments)                                 | `uint8`  |
-| `record_num`                     | number of records in the block                              | `uint16` |
-| `compression_segment_names`      | Encoding strategy for the segment names (2 bytes)           | `uint16` |
-| `compressed_segment_names_len`   | length of compressed segment names field                    | `uint64` |
-| `uncompressed_segment_names_len` | sum of the lengths of the uncompressed segment names        | `uint64` |
-| `compression_segment_str`        | Encoding strategy for the segment sequences (2 bytes)       | `uint16` |
-| `compressed_segment_str_len`     | length of compressed segment_sequences field                | `uint64` |
-| `uncompressed_segment_str_len`   | sum of the lengths of uncompressed segment_sequences fields | `uint64` |
+| Field                            | Description                                                 | Type       |
+| -------------------------------- | ----------------------------------------------------------- | ---------- |
+| `section_id`                     | Section type (2 = segments)                                 | `uint8`    |
+| `record_num`                     | number of records in the block                              | `uint16`   |
+| `compression_segment_names`      | Encoding strategy for the segment names (2 bytes)           | `bytes[2]` |
+| `compressed_segment_names_len`   | length of compressed segment names field                    | `uint64`   |
+| `uncompressed_segment_names_len` | sum of the lengths of the uncompressed segment names        | `uint64`   |
+| `compression_segment_str`        | Encoding strategy for the segment sequences (2 bytes)       | `bytes[2]` |
+| `compressed_segment_str_len`     | length of compressed segment_sequences field                | `uint64`   |
+| `uncompressed_segment_str_len`   | sum of the lengths of uncompressed segment_sequences fields | `uint64`   |
 
 The length of the uncompressed segment names does not include any terminator character.
 
 #### Payload
 
-| Field             | Description       | Type      |
-|-------------------|-------------------|-----------|
-| `segment_names`   | Segment names     | `strings` |
-| `sequences`       | Segment sequences | `strings` |
+| Field           | Description       | Type      |
+| --------------- | ----------------- | --------- |
+| `segment_names` | Segment names     | `strings` |
+| `sequences`     | Segment sequences | `strings` |
 
 **Layout:** The payload consists of encoded segment names followed by encoded sequences.
 We have two distinct encoding strategies.
@@ -187,17 +293,17 @@ Each block consists of a header and a payload.
 
 The following is the sequence of fields making up the header.
 
-| Field                           | Description                                            | Type     |
-|---------------------------------|--------------------------------------------------------|----------|
-| `section_id`                    | Section type (3 = links)                               | `uint8`  |
-| `record_num`                    | number of records in the block                         | `uint16` |
-| **From/To field**               |                                                        |          |
-| `compression_fromto`            | Encoding strategy for the from/to fields               | `uint16` |
-| `compressed_fromto_len`         | length of compressed from/to payload (metadata + blob) | `uint64` |
-| **CIGAR field**                 |                                                        |          |
-| `compression_links_cigars`      | Encoding strategy for the cigar strings (4 bytes)      | `uint32` |
-| `compressed_links_cigars_len`   | length of compressed cigars payload (metadata + blob)  | `uint64` |
-| `uncompressed_links_cigars_len` | sum of the lengths of uncompressed cigars              | `uint64` |
+| Field                           | Description                                            | Type       |
+| ------------------------------- | ------------------------------------------------------ | ---------- |
+| `section_id`                    | Section type (3 = links)                               | `uint8`    |
+| `record_num`                    | number of records in the block                         | `uint16`   |
+| **From/To field**               |                                                        |            |
+| `compression_fromto`            | Encoding strategy for the from/to fields               | `bytes[2]` |
+| `compressed_fromto_len`         | length of compressed from/to payload (metadata + blob) | `uint64`   |
+| **CIGAR field**                 |                                                        |            |
+| `compression_links_cigars`      | Encoding strategy for the cigar strings (4 bytes)      | `bytes[4]` |
+| `compressed_links_cigars_len`   | length of compressed cigars payload (metadata + blob)  | `uint64`   |
+| `uncompressed_links_cigars_len` | sum of the lengths of uncompressed cigars              | `uint64`   |
 
 #### Payload
 
@@ -207,7 +313,7 @@ For example, if the list of `from_ids` requires 155 bits, it is padded with 5 ad
 length is 20 bytes.
 
 | Field                 | Description                                       | Type                         |
-|-----------------------|---------------------------------------------------|------------------------------|
+| --------------------- | ------------------------------------------------- | ---------------------------- |
 | `from_ids`            | Tail segment IDs (1-based; 0 = no connection)     | `uints`                      |
 | `to_ids`              | Head segment IDs (1-based; 0 = no connection)     | `uints`                      |
 | `from_orientation`    | Orientations of all from segments. 0 is +, 1 is - | `bits` (length = record_num) |
@@ -230,26 +336,26 @@ Each block consists of a header and a payload.
 
 The following is the sequence of fields making up the header.
 
-| Field                          | Description                                                      | Type     |
-|--------------------------------|------------------------------------------------------------------|----------|
-| `section_id`                   | Section type (4 = paths)                                         | `uint8`  |
-| `record_num`                   | number of records in the block                                   | `uint16` |
-| `compression_path_names`       | Encoding strategy for the path names (2 bytes)                   | `uint16` |
-| `compressed_path_names_len`    | length of compressed concatenated path names                     | `uint64` |
-| `uncompressed_path_names_len`  | length of uncompressed concatenated path names                   | `uint64` |
-| `compression_paths`            | Encoding strategy for the paths as list of segment IDs (4 bytes) | `uint32` |
-| `compressed_paths_len`         | length of compressed paths                                       | `uint64` |
-| `uncompressed_paths_len`       | sum of the lengths of uncompressed paths (as segment ID strings) | `uint64` |
-| `compression_paths_cigars`     | Encoding strategy for the cigar strings (4 bytes)                | `uint32` |
-| `compressed_paths_len_cigar`   | length of compressed concatenated cigars                         | `uint64` |
-| `uncompressed_paths_len_cigar` | sum of the lengths of uncompressed concatenated cigars strings   | `uint64` |
+| Field                          | Description                                                      | Type       |
+| ------------------------------ | ---------------------------------------------------------------- | ---------- |
+| `section_id`                   | Section type (4 = paths)                                         | `uint8`    |
+| `record_num`                   | number of records in the block                                   | `uint16`   |
+| `compression_path_names`       | Encoding strategy for the path names (2 bytes)                   | `bytes[2]` |
+| `compressed_path_names_len`    | length of compressed concatenated path names                     | `uint64`   |
+| `uncompressed_path_names_len`  | length of uncompressed concatenated path names                   | `uint64`   |
+| `compression_paths`            | Encoding strategy for the paths as list of segment IDs (4 bytes) | `bytes[4]` |
+| `compressed_paths_len`         | length of compressed paths                                       | `uint64`   |
+| `uncompressed_paths_len`       | sum of the lengths of uncompressed paths (as segment ID strings) | `uint64`   |
+| `compression_paths_cigars`     | Encoding strategy for the cigar strings (4 bytes)                | `bytes[4]` |
+| `compressed_paths_len_cigar`   | length of compressed concatenated cigars                         | `uint64`   |
+| `uncompressed_paths_len_cigar` | sum of the lengths of uncompressed concatenated cigars strings   | `uint64`   |
 
 #### Payload
 
 The following is the sequence of fields making up the payload layout.
 
 | Field                 | Description                                            | Type      |
-|-----------------------|--------------------------------------------------------|-----------|
+| --------------------- | ------------------------------------------------------ | --------- |
 | `path_names`          | Path names                                             | `strings` |
 | `paths`               | Paths, each path is a sequence of oriented segment IDs | `walks`   |
 | `paths_cigar_strings` | The list of CIGAR strings                              | `strings` |
@@ -262,39 +368,39 @@ Each block consists of a header and a payload.
 
 The following is the sequence of fields making up the header.
 
-| Field                         | Description                                                          | Type     |
-|-------------------------------|----------------------------------------------------------------------|----------|
-| `section_id`                  | Section type (5 = walks)                                             | `uint8`  |
-| `record_num`                  | number of records in the block                                       | `uint16` |
-| **Compression strategies**    |                                                                      |          |
-| `compression_sample_ids`      | Encoding strategy for the sample IDs (2 bytes)                       | `uint16` |
-| `compression_hep`             | Encoding strategy for the haplotype indices (2 bytes)                | `uint16` |
-| `compression_sequence`        | Encoding strategy for the sequence IDs                               | `uint8`  |
-| `compression_positions_start` | Encoding strategy for the start positions                            | `uint8`  |
-| `compression_positions_end`   | Encoding strategy for the  end positions                             | `uint8`  |
-| `compression_walks`           | Encoding strategy for the walks (4 bytes)                            | `uint32` |
-| **Samples field**             |                                                                      |          |
-| `compressed_sample_ids_len`   | length of compressed sample IDs payload (metadata + blob)            | `uint64` |
-| `uncompressed_sample_ids_len` | sum of the lengths of uncompressed sample IDs                        | `uint64` |
-| **Haplotype indices field**   |                                                                      |          |
-| `compressed_hep_len`          | length of compressed haplotype indices payload (metadata + blob)     | `uint64` |
-| `uncompressed_hep_len`        | sum of the lengths of uncompressed haplotype indices                 | `uint64` |
-| **Sequence IDs field**        |                                                                      |          |
-| `compressed_sequence_len`     | length of compressed sequence IDs payload (metadata + blob)          | `uint64` |
-| `uncompressed_sequence_len`   | sum of the lengths of uncompressed sequence IDs                      | `uint64` |
-| **Positions field**           |                                                                      |          |
-| `compressed_positions_len`    | length of compressed positions payload (metadata + blob)             | `uint64` |
-| `uncompressed_positions_len`  | sum of the lengths of uncompressed positions                         | `uint64` |
-| **Walks field**               |                                                                      |          |
-| `compressed_walk_len`         | length of compressed walks payload (metadata + blob)                 | `uint64` |
-| `uncompressed_walk_len`       | sum of the lengths of uncompressed walks (total segment occurrences) | `uint64` |
+| Field                         | Description                                                          | Type       |
+| ----------------------------- | -------------------------------------------------------------------- | ---------- |
+| `section_id`                  | Section type (5 = walks)                                             | `uint8`    |
+| `record_num`                  | number of records in the block                                       | `uint16`   |
+| **Compression strategies**    |                                                                      |            |
+| `compression_sample_ids`      | Encoding strategy for the sample IDs (2 bytes)                       | `bytes[2]` |
+| `compression_hep`             | Encoding strategy for the haplotype indices (2 bytes)                | `bytes[2]` |
+| `compression_sequence`        | Encoding strategy for the sequence IDs                               | `byte`     |
+| `compression_positions_start` | Encoding strategy for the start positions                            | `byte`     |
+| `compression_positions_end`   | Encoding strategy for the end positions                              | `byte`     |
+| `compression_walks`           | Encoding strategy for the walks (4 bytes)                            | `bytes[4]` |
+| **Samples field**             |                                                                      |            |
+| `compressed_sample_ids_len`   | length of compressed sample IDs payload (metadata + blob)            | `uint64`   |
+| `uncompressed_sample_ids_len` | sum of the lengths of uncompressed sample IDs                        | `uint64`   |
+| **Haplotype indices field**   |                                                                      |            |
+| `compressed_hep_len`          | length of compressed haplotype indices payload (metadata + blob)     | `uint64`   |
+| `uncompressed_hep_len`        | sum of the lengths of uncompressed haplotype indices                 | `uint64`   |
+| **Sequence IDs field**        |                                                                      |            |
+| `compressed_sequence_len`     | length of compressed sequence IDs payload (metadata + blob)          | `uint64`   |
+| `uncompressed_sequence_len`   | sum of the lengths of uncompressed sequence IDs                      | `uint64`   |
+| **Positions field**           |                                                                      |            |
+| `compressed_positions_len`    | length of compressed positions payload (metadata + blob)             | `uint64`   |
+| `uncompressed_positions_len`  | sum of the lengths of uncompressed positions                         | `uint64`   |
+| **Walks field**               |                                                                      |            |
+| `compressed_walk_len`         | length of compressed walks payload (metadata + blob)                 | `uint64`   |
+| `uncompressed_walk_len`       | sum of the lengths of uncompressed walks (total segment occurrences) | `uint64`   |
 
 #### Payload
 
 The following is the sequence of fields making up the payload layout.
 
 | Field               | Description                                            | Type      |
-|---------------------|--------------------------------------------------------|-----------|
+| ------------------- | ------------------------------------------------------ | --------- |
 | `sample_ids`        | Sample IDs                                             | `strings` |
 | `haplotype_indices` | Haplotype indices                                      | `uints`   |
 | `sequence_ids`      | Sequence IDs                                           | `strings` |
@@ -302,47 +408,47 @@ The following is the sequence of fields making up the payload layout.
 | `end_positions`     | End positions                                          | `uints`   |
 | `walks`             | Walks, each walk is a sequence of oriented segment IDs | `walks`   |
 
-Since there are `record_num` records in the block, the block contains `record_num` sample IDs, followed by  `record_num`
-haplotype indices, followed by  `record_num` sequence IDs, followed by  `record_num` start positions, followed by
-`record_num` end positions, followed by  `record_num` walks.
+Since there are `record_num` records in the block, the block contains `record_num` sample IDs, followed by `record_num`
+haplotype indices, followed by `record_num` sequence IDs, followed by `record_num` start positions, followed by
+`record_num` end positions, followed by `record_num` walks.
 
 ## Walks Type Format
 
 The `walks` type encodes a list of walks, where each walk is a sequence of oriented segment IDs. This type is used in the Paths and Walks blocks.
-Since we know that there are  `record_num` walks in the block, we do not have to store that information again.
+Since we know that there are `record_num` walks in the block, we do not have to store that information again.
 The `walks` layout is made by the following sequence of fields.
 
-
 | Field                | Description                   | Type    |
-|----------------------|-------------------------------|---------|
+| -------------------- | ----------------------------- | ------- |
 | `walks_lengths`      | The lengths of the walks      | `uints` |
 | `walks_segments`     | The segment IDs of the walks  | `uints` |
 | `walks_orientations` | The orientations of the walks | `bits`  |
 |                      |                               |         |
 
--  All lengths of the walks are followed by all segment IDs of the walks, followed by all walks orientations.
--  The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` from the containing block header.
--  The `walks_segments` field contains a sequence of `uncompressed_walk_len` integers. The first L(1) integers form the sequence of segment IDs of the first walk, then the subsequent L(2) integers form the sequence of the segment IDs of the second walk, etc.
--  The `walks_orientations` field contains a sequence of `uncompressed_walk_len` bits. The first L(1) bits form the sequence of segment orientations of the first walk, then the subsequent L(2) bits form the sequence of the segment orientations of the second walk. Orientation `+` or `>` is encoded as `0`, while `-` or `<` is encoded as 1.
--  **Encoding strategy:** Both `walks_lengths` and `walks_segments` are encoded using the integer encoding strategy specified in bytes 3-4 of the `compression_walks` field in the containing block header. The `walks_orientations` field is always encoded as raw bits (no compression).
+- All lengths of the walks are followed by all segment IDs of the walks, followed by all walks orientations.
+- The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` from the containing block header.
+- The `walks_segments` field contains a sequence of `uncompressed_walk_len` integers. The first L(1) integers form the sequence of segment IDs of the first walk, then the subsequent L(2) integers form the sequence of the segment IDs of the second walk, etc.
+- The `walks_orientations` field contains a sequence of `uncompressed_walk_len` bits. The first L(1) bits form the sequence of segment orientations of the first walk, then the subsequent L(2) bits form the sequence of the segment orientations of the second walk. Orientation `+` or `>` is encoded as `0`, while `-` or `<` is encoded as 1.
+- **Encoding strategy:** Both `walks_lengths` and `walks_segments` are encoded using the integer encoding strategy specified in the third and fourth bytes of the `compression_walks` field in the containing block header. The `walks_orientations` field is always encoded as raw bits (no compression).
 
 **Example:** Consider a walks block with 2 walks:
+
 - Walk 1: "0+1-" (length 2, segments 0 and 1 with orientations + and -)
 - Walk 2: "2+" (length 1, segment 2 with orientation +)
 
 This would be encoded as:
+
 - `walks_lengths`: [2, 1] (encoded per the integer strategy in bytes 3-4)
 - `walks_segments`: [0, 1, 2] (segment IDs for both walks concatenated)
 - `walks_orientations`: [0, 1, 0] (0=+, 1=- for each segment, packed as bits)
-
 
 ## Superstring and Concatenation Encoding
 
 The `strings` type supports two encoding modes for combining multiple strings into a single blob:
 
-**Concatenation:** All strings are concatenated end-to-end into a single byte sequence. The metadata stores the length of each string. To recover string *i*, the decoder reads `length[i]` bytes from the cumulative offset.
+**Concatenation:** All strings are concatenated end-to-end into a single byte sequence. The metadata stores the length of each string. To recover string _i_, the decoder reads `length[i]` bytes from the cumulative offset.
 
-**Superstring:** All strings are embedded within a single "superstring" constructed by a heuristic that minimizes total length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string *i*, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
+**Superstring:** All strings are embedded within a single "superstring" constructed by a heuristic that minimizes total length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string _i_, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
 
 Both modes use the same 2-byte strategy code: the first byte encodes the integer strategy for the metadata (lengths or positions), and the second byte encodes the compression strategy for the blob.
 
@@ -351,6 +457,7 @@ Both modes use the same 2-byte strategy code: the first byte encodes the integer
 Both the Walks and Paths blocks use the `walks` type to encode sequences of oriented segment IDs. The encoding is identical in both cases: a list of walks, where each walk is a sequence of segment IDs with orientations.
 
 The key difference is in the surrounding metadata:
+
 - **Walks block**: Each walk is associated with sample ID, haplotype, sequence ID, and positional metadata.
 - **Paths block**: Each walk is associated with a path name and optional CIGAR strings.
 
@@ -361,20 +468,20 @@ The `compression_walks` (Walks block) and `compression_paths` (Paths block) fiel
 When we have to encode a list of strings (the `strings` type), we choose the encoding strategy with a code consisting of
 two bytes.
 
-The first byte (high byte) encodes the strategy for a sequence of uints, which are
+The first byte encodes the strategy for a sequence of uints, which are
 the starting and ending position of the strings within a superstring of all
 strings, without the terminator character `\0`.
 
 The start and end positions are 0-based, the final position is excluded from the substring, following Python slice conventions.
 
-The second byte (low byte) represents the strategy for encoding the superstring.
+The second byte represents the strategy for encoding the superstring.
 
-For example, the code 0x0102 is used for method 0x01 (varint) for the lengths and method 0x02 (gzip) for the superstring.
+For example, the code `0x0102` is used for method `0x01` (varint) for the lengths and method `0x02` (gzip) for the superstring.
 
 We use question marks `??` to represent that all values of the byte can be used.
 
 | Code     | Strategy        | Type     |
-|----------|-----------------|----------|
+| -------- | --------------- | -------- |
 | `0x00??` | none (identity) | `uints`  |
 | `0x01??` | varint          | `uints`  |
 | `0x02??` | fixed16         | `uints`  |
@@ -413,11 +520,13 @@ This section defines the algorithms for integer encoding strategies referenced i
 The delta encoding stores differences between consecutive values. This is particularly effective for sorted or monotonically increasing sequences.
 
 **Format:**
+
 - First value stored as-is using the base encoding
 - Subsequent values stored as: value[i] - value[i-1]
 - The decoder adds each delta to the previous reconstructed value
 
 **Example:** Sequence [100, 105, 108, 110] encoded as delta:
+
 - Stored: [100, 5, 3, 2]
 - Decoded: [100, 100+5=105, 105+3=108, 108+2=110]
 
@@ -426,15 +535,18 @@ The delta encoding stores differences between consecutive values. This is partic
 ### Elias Gamma (0x04??)
 
 Elias gamma encoding represents a number n using two parts:
+
 1. Unary representation of floor(log2(n)) + 1
 2. Binary representation of n - 2^floor(log2(n))
 
 **Format:**
+
 - For value n:
   - Write floor(log2(n)) + 1 in unary (that many 1 bits, followed by 0)
   - Write n - 2^floor(log2(n)) in binary (floor(log2(n)) bits)
 
 **Example:** n = 5
+
 - floor(log2(5)) + 1 = 3
 - Unary: 1110
 - n - 2^2 = 5 - 4 = 1 = 01 (2 bits)
@@ -445,6 +557,7 @@ Elias gamma encoding represents a number n using two parts:
 Elias omega starts with 0 and builds up, using the previous code length.
 
 **Format:**
+
 - For n = 1: output "0"
 - For n > 1:
   1. Write n in binary
@@ -457,6 +570,7 @@ Elias omega starts with 0 and builds up, using the previous code length.
 Golomb encoding uses a parameter b (default b=128).
 
 **Format:**
+
 - For value n:
   - quotient q = n // b, remainder r = n % b
   - Write q in unary (q ones, then zero)
@@ -469,6 +583,7 @@ Golomb encoding uses a parameter b (default b=128).
 Rice coding is Golomb with b as a power of 2: b = 2^k.
 
 **Format:**
+
 - Parameter k (0-31) stored as the first byte of the integer payload (before the encoded values)
 - For value n:
   - quotient q = n >> k
@@ -477,6 +592,7 @@ Rice coding is Golomb with b as a power of 2: b = 2^k.
   - Write r in binary using k bits
 
 **Example:** For k=3 and sequence [5, 12, 7]:
+
 - Parameter byte: 0x03
 - Encoded values follow the parameter byte
 
@@ -485,6 +601,7 @@ Rice coding is Golomb with b as a power of 2: b = 2^k.
 StreamVByte encodes multiple varints in parallel using SIMD-like packing.
 
 **Format:**
+
 - Control bytes indicate which varints use 1, 2, 3, or 4 bytes
 - Data bytes contain the varints packed together
 
@@ -493,6 +610,7 @@ StreamVByte encodes multiple varints in parallel using SIMD-like packing.
 Variable Byte encoding uses 7 bits per byte for data, with high bit as continuation flag.
 
 **Format:**
+
 - Each byte: 7 data bits + 1 continuation bit (1 = more bytes follow, 0 = last byte)
 - Little-endian ordering (least significant byte first)
 
@@ -509,11 +627,13 @@ The payload of the encoded `strings` consists of:
 2.  **Blob**: The superstring or the concatenated string, encoded according to the second-byte strategy.
 
 **Layout for Concatenation encoding:**
+
 ```
 [length_0][length_1]...[length_n-1][blob]
 ```
 
 **Layout for Superstring encoding:**
+
 ```
 [start_0][start_1]...[start_n-1][end_0][end_1]...[end_n-1][blob]
 ```
@@ -529,12 +649,14 @@ The `uncompressed_len` field is the sum of the lengths of the original strings (
 A `bits` field represents a list of bits packed into `uint64` words in little-endian format.
 
 **Packing strategy:**
+
 - Bits are packed LSB-first within each `uint64` word
 - Bit at index `i` is stored at position `i % 64` within word `i // 64`
 - The number of `uint64` words is `ceil(n / 64)` where `n` is the number of bits
 - Unused bits in the final word (if any) are set to 0 when writing and MUST be ignored when reading
 
 **Determining the number of bits (n):** The value of `n` depends on the context:
+
 - **Links block orientations** (`from_orientation`, `to_orientation`): `n = record_num` from the block header
 - **Walks type orientations** (`walks_orientations`): `n = uncompressed_walk_len` from the containing block header
 - **Walks/Paths block strategy codes** (orientation + strid/numid): `n` equals the total number of segment occurrences across all walks/paths
@@ -543,16 +665,19 @@ A `bits` field represents a list of bits packed into `uint64` words in little-en
 **Size calculation:** Number of uint64 words = `ceil(n / 64)`. Total bytes for bits field = `8 * ceil(n / 64)`.
 
 **Example:** For orientations `[1, 0, 1, 1, 0, ...]` (64 bits):
+
 - Word 0 = `0b...01101` (bit 0 = 1, bit 1 = 0, bit 2 = 1, bit 3 = 1, bit 4 = 0, ...)
 
 ## Arithmetic Coding (0x??06)
 
 **Format:**
+
 - `uint32`: frequency table size (number of symbol-frequency pairs), little-endian
 - `bytes`: frequency table (symbol:count pairs)
 - `bytes`: arithmetic encoded data
 
 The frequency table contains ONLY symbols with non-zero frequency. Each entry is a pair of:
+
 - `symbol`: 1 byte (ASCII value)
 - `frequency`: `uint32` little-endian (count of symbol occurrences)
 
@@ -563,7 +688,7 @@ The `frequency table size` field indicates the number of pairs in the table. Tot
 The Huffman encoding of a string (be it the concatenation or a superstring) consists of:
 
 | Name              | Description                             | Type     |
-|-------------------|-----------------------------------------|----------|
+| ----------------- | --------------------------------------- | -------- |
 | `codebook_len`    | Length of the encoded codebook in bytes | `uint16` |
 | `codebook`        | 16 little-endian uint16 bit-lengths     | `bytes`  |
 | `huffman_encoded` | The encoded string                      | `bits`   |
@@ -586,6 +711,7 @@ The decoder MUST reconstruct the Huffman codes from the 16 bit-lengths using can
 1. Collect all (symbol, bit-length) pairs where bit-length > 0
 2. Sort primarily by bit-length (ascending) and secondarily by symbol value (ascending)
 3. Assign codes sequentially using the following algorithm:
+
    ```python
    # Initialize
    code = 0
@@ -599,9 +725,11 @@ The decoder MUST reconstruct the Huffman codes from the 16 bit-lengths using can
        huffman_codes[symbol] = (code, bit_len)
        prev_len = bit_len
    ```
+
 4. Zero bit-length symbols are not in the alphabet and will not appear in the encoded data
 
 **Example:** Given bit-lengths: `{0x41: 2, 0x42: 3, 0x43: 3}` (symbols 'A', 'B', 'C'):
+
 - Sorted by (bit-length, symbol): `[(0x41, 2), (0x42, 3), (0x43, 3)]`
 - Code assignment:
   - 'A' (0x41): bit-length=2, code=0b00 (first, shortest)
@@ -609,6 +737,7 @@ The decoder MUST reconstruct the Huffman codes from the 16 bit-lengths using can
   - 'C' (0x43): bit-length=3, code=(0b010+1)<<0 = 0b011
 
 **Encoding process:**
+
 1. Convert each input byte to two nibbles (high nibble, low nibble)
 2. Look up each nibble's code in the reconstructed codebook
 3. Concatenate all codes into a bitstream
@@ -616,6 +745,7 @@ The decoder MUST reconstruct the Huffman codes from the 16 bit-lengths using can
 
 **Decoding:**
 The byte-length of the `huffman_encoded` data is the total `compressed_len` of the field minus:
+
 - bytes consumed by the string metadata
 - 2-byte `codebook_len`
 - 32 bytes for the codebook
@@ -643,6 +773,7 @@ Burrows-Wheeler Transform + Huffman coding provides excellent compression for re
 The block size is fixed at 65536 bytes (64KB).
 
 **Format:**
+
 - `uint32`: number of BWT blocks
 - For each block:
   - `uint32`: primary index
@@ -654,6 +785,7 @@ The block size is fixed at 65536 bytes (64KB).
 2-bit DNA encoding provides optimal compression for DNA/RNA sequences by encoding each nucleotide in 2 bits instead of 8 bits (75% size reduction). This is the most impactful encoding for pangenome data where sequences typically comprise 70-80% of file content.
 
 **Nucleotide Mapping:**
+
 - A (or a) = 00
 - C (or c) = 01
 - G (or g) = 10
@@ -663,16 +795,19 @@ The block size is fixed at 65536 bytes (64KB).
 **Bit packing:** Nucleotides are packed MSB-first. The first nucleotide is stored in bits 7-6 of the first byte, the second in bits 5-4, the third in bits 3-2, the fourth in bits 1-0. Subsequent nucleotides continue in subsequent bytes.
 
 **Example:** Sequence "ACGT" (4 nucleotides):
+
 - A=00, C=01, G=10, T=11
 - Packed: `0b00011011` = 0x1B (1 byte)
 
 **Example:** Sequence "ACGTA" (5 nucleotides):
+
 - A=00, C=01, G=10, T=11, A=00
 - Packed: `0b00011011` `0b00000000` = 0x1B 0x00 (2 bytes, last 6 bits are padding)
 
 **Note:** Unused bits in the final byte MUST be set to 0 when writing and MUST be ignored when reading.
 
 **Format:**
+
 - 1 byte: flags
   - bit 0: `has_exceptions` (1 if exception table present, 0 otherwise)
   - bits 1-7: reserved (set to 0)
@@ -694,6 +829,7 @@ Ambiguity codes (N, R, Y, K, M, S, W, B, D, H, V, -) and unknown characters are 
 Run-Length Encoding efficiently compresses sequences with repeated characters (homopolymers in DNA, repeated operations in other contexts). The implementation uses a hybrid mode that switches between raw and RLE encoding to prevent expansion on non-repetitive data.
 
 **Format:**
+
 - `varint`: run count (number of runs)
 - For each run:
   - 1 byte: mode (0x00=raw, 0x01=RLE)
@@ -703,6 +839,7 @@ Run-Length Encoding efficiently compresses sequences with repeated characters (h
     - If RLE mode: sequence of `[char: 1 byte][count: varint]` pairs
 
 **Algorithm:**
+
 - Minimum run length: 3 characters (shorter runs use raw encoding)
 - Automatically switches between raw and RLE modes within a string to prevent expansion on non-repetitive data
 - Run counts encoded as varint for efficiency
@@ -712,6 +849,7 @@ Run-Length Encoding efficiently compresses sequences with repeated characters (h
 **Expected Compression:** 30-50% reduction on sequences with homopolymers or repetitive patterns.
 
 **Primary Use Cases:**
+
 - DNA sequences with homopolymer runs (AAAAAAA, GGGGGG, TTTTTT)
 - Can be combined with 2-bit DNA encoding for additional compression
 - General string data with repeated characters
@@ -721,11 +859,12 @@ Run-Length Encoding efficiently compresses sequences with repeated characters (h
 Dictionary encoding is optimized for repetitive string data by replacing repeated strings with short references to a dictionary.
 
 **Format (Concatenation mode):**
+
 - `uint32`: dictionary size (number of unique strings), little-endian
 - `uints` list: dictionary entry offsets (N+1 values, where N = dictionary size)
   - Offsets are cumulative from the start of the dictionary blob
   - The (N+1)-th offset equals the total blob length
-  - Offsets are encoded using the integer encoding strategy specified in the first byte (high byte) of the 2-byte compression code `0x??0A`
+  - Offsets are encoded using the integer encoding strategy specified in the first byte of the 2-byte compression code `0xHH0A`
 - `bytes`: concatenated dictionary entries (each entry is a unique string, no terminators)
 - `uints` list: indices into dictionary for each input string, encoded using the same integer strategy as offsets
 
@@ -734,6 +873,7 @@ Dictionary encoding is optimized for repetitive string data by replacing repeate
 **Expected Compression:** 60-90% reduction on highly repetitive data (e.g., sample IDs repeated across thousands of walks).
 
 **Primary Use Cases:**
+
 - Sample identifiers in walk blocks
 - Segment names with common prefixes
 - Path names with structural patterns
@@ -744,6 +884,7 @@ Dictionary encoding is optimized for repetitive string data by replacing repeate
 CIGAR strings represent sequence alignments with alternating numbers and operation letters. This encoding exploits the structure of CIGAR strings to achieve better compression than general-purpose methods.
 
 **CIGAR Operations:**
+
 ```
 M = 0x0 (match/mismatch)
 I = 0x1 (insertion)
@@ -757,6 +898,7 @@ X = 0x8 (sequence mismatch)
 ```
 
 **Format:**
+
 - `varint`: number of operations
 - `packed_ops`: 2 operations per byte (4 bits each)
   - High nibble: operation n
@@ -768,6 +910,7 @@ X = 0x8 (sequence mismatch)
 
 **Example:**
 CIGAR string "10M2I5D" is encoded as:
+
 - `num_ops`: 3 (varint)
 - `packed_ops`: 0x01, 0x2F (operations M=0, I=1, D=2 with padding 0xF)
 - `lengths`: 10, 2, 5 (varints)
@@ -775,82 +918,129 @@ CIGAR string "10M2I5D" is encoded as:
 **Expected Compression:** 40-60% reduction compared to ASCII CIGAR strings.
 
 **Primary Use Cases:**
+
 - Link overlaps (L lines in GFA)
 - Path CIGAR strings (P lines in GFA)
 - Any alignment representation using CIGAR format
 
 ## CIGAR 4-byte Strategy Codes
 
-For CIGAR strings, we use 4 bytes to encode the strategy. The first byte represents how we decompose the CIGAR strings, the other three bytes specify how we encode each component.
+For CIGAR strings, we use 4 bytes to encode the strategy.
 
-| Code         | Strategy                             |
-|--------------|--------------------------------------|
-| `0x00??????` | none (identity)                      |
-| `0x01??????` | numOperations + lengths + operations |
-| `0x02??????` | string (treat as plain string)       |
+**Format:** `0xDDRRIISS`
+**Bytes:** `[DD, RR, II, SS]`
+
+| Format       | Bytes              | Strategy                             |
+| ------------ | ------------------ | ------------------------------------ |
+| `0x00??????` | `[00, ??, ??, ??]` | none (identity)                      |
+| `0x01??????` | `[01, RR, II, SS]` | numOperations + lengths + operations |
+| `0x02??????` | `[02, 00, II, SS]` | string (treat as plain string)       |
 
 ### numOperations + lengths + operations (0x01??????)
 
+**Format:** `0x01RRIISS`
+**Bytes:** `[01, RR, II, SS]`
+
 We encode three components:
 
-1. The list of the number of operations in each CIGAR string (`uints`) - encoded with strategy in byte 2
-2. The list of lengths of the operations (`uints`) - encoded with strategy in byte 3
-3. The operations as a packed string - encoded with strategy in byte 4
+1. The list of the number of operations in each CIGAR string (`uints`) - encoded with strategy `II`
+2. The list of lengths of the operations (`uints`) - encoded with strategy `RR`
+3. The operations as a packed string - encoded with strategy `SS`
 
-**Format:**
-- Byte 1 (0x01): Use numOperations+lengths+operations decomposition
-- Byte 2: Integer encoding strategy for operation counts (e.g., 0x01 for varint, 0x02 for fixed16)
-- Byte 3: Integer encoding strategy for operation lengths (e.g., 0x01 for varint, 0x03 for LZMA)
-- Byte 4: String encoding strategy for packed operations (e.g., 0x00 for none, 0x04 for Huffman)
+**Byte assignments:**
 
-**Example:** `0x01020304` means:
-- Byte 1 (0x01): Use numOperations+lengths+operations decomposition
-- Byte 2 (0x02): Use fixed16 to encode the list of operation counts
-- Byte 3 (0x03): Use lzma to encode the operation lengths
-- Byte 4 (0x04): Use Huffman to encode the packed operations string
+- First byte (`0x01`): Decomposition strategy (numOperations+lengths+operations)
+- Second byte (`RR`): Integer encoding strategy for operation lengths (e.g., `0x01` for varint, `0x03` for LZMA)
+- Third byte (`II`): Integer encoding strategy for operation counts (e.g., `0x01` for varint, `0x02` for fixed16)
+- Fourth byte (`SS`): String encoding strategy for packed operations (e.g., `0x00` for none, `0x04` for Huffman)
+
+**Example:** Strategy code `0x01020304` = Bytes `[0x01, 0x02, 0x03, 0x04]` means:
+
+- First byte (`0x01`): Use numOperations+lengths+operations decomposition
+- Second byte (`0x02`): Use fixed16 to encode the list of operation counts
+- Third byte (`0x03`): Use LZMA to encode the operation lengths
+- Fourth byte (`0x04`): Use Huffman to encode the packed operations string
 
 ### string (0x02??????)
 
-We compress the CIGAR strings separated by newlines with the method specified in the second byte.
+**Format:** `0x0200IISS`
+**Bytes:** `[02, 00, II, SS]`
 
-**Example:** `0x02030000` means:
-- Byte 1 (0x02): Use string decomposition
-- Byte 2 (0x03): Use lzma to compress the newline-separated CIGAR strings
-- Bytes 3-4: Reserved (set to 0)
+We compress the CIGAR strings separated by newlines with the method specified by `II` and `SS`.
+
+**Byte assignments:**
+
+- First byte (`0x02`): Decomposition strategy (string)
+- Second byte (`0x00`): Reserved (MUST be `0x00`)
+- Third byte (`II`): Integer encoding strategy (MUST be `0x00` for string decomposition)
+- Fourth byte (`SS`): String encoding strategy (e.g., `0x03` for LZMA)
+
+**Example:** Strategy code `0x02000003` = Bytes `[0x02, 0x00, 0x00, 0x03]` means:
+
+- First byte (`0x02`): Use string decomposition
+- Second byte (`0x00`): Reserved
+- Third byte (`0x00`): No integer encoding (string mode)
+- Fourth byte (`0x03`): Use LZMA to compress the newline-separated CIGAR strings
 
 ## Walks and Paths 4-byte Strategy Codes
 
-For walks and paths, we use 4 bytes to encode the strategy. The first byte represents how we decompose the walk (or the path), the other three bytes specify how we encode each component.
+For walks and paths, we use 4 bytes to encode the strategy.
 
-| Code         | Strategy            |
-|--------------|---------------------|
-| `0x00??????` | none (identity)     |
-| `0x01??????` | orientation + strid |
-| `0x02??????` | orientation + numid |
+**Format:** `0xDD00IISS`
+**Bytes:** `[DD, 00, II, SS]`
+
+| Format       | Bytes              | Strategy            |
+| ------------ | ------------------ | ------------------- |
+| `0x00??????` | `[00, ??, ??, ??]` | none (identity)     |
+| `0x01??????` | `[01, 00, HH, LL]` | orientation + strid |
+| `0x02??????` | `[02, 00, II, 00]` | orientation + numid |
 
 ### orientation + strid (0x01??????)
 
+**Format:** `0x0100HHLL`
+**Bytes:** `[01, 00, HH, LL]`
+
 We encode two components:
 
 1. The list of orientations in binary form (0 corresponds to `>` or `+`, 1 corresponds to `<` or `-`) - encoded as `bits`
-2. The list of segment IDs encoded as strings - encoded with strategy specified in bytes 3-4
+2. The list of segment IDs encoded as strings - encoded with 2-byte strategy `HHLL`
 
-**Format:**
-- Byte 1 (0x01): Use orientation + strid decomposition
-- Byte 2: Reserved (MUST be set to 0x00, ignored on read)
-- Bytes 3-4: String encoding strategy for segment IDs (e.g., 0x0100 for varint lengths + none)
+**Byte assignments:**
+
+- First byte (`0x01`): Decomposition strategy (orientation + strid)
+- Second byte (`0x00`): Reserved (MUST be `0x00`, ignored on read)
+- Third byte (`HH`): Integer encoding strategy for string metadata
+- Fourth byte (`LL`): String encoding strategy for segment IDs
+
+**Example:** Strategy code `0x01000100` = Bytes `[0x01, 0x00, 0x01, 0x00]` means:
+
+- First byte (`0x01`): Use orientation + strid decomposition
+- Second byte (`0x00`): Reserved
+- Third and fourth bytes (`0x01 0x00`): Use varint lengths + none for segment ID strings
 
 ### orientation + numid (0x02??????)
 
+**Format:** `0x0200II00`
+**Bytes:** `[02, 00, II, 00]`
+
 We encode two components:
 
 1. The list of orientations in binary form (0 corresponds to `>` or `+`, 1 corresponds to `<` or `-`) - encoded as `bits`
-2. The list of segment IDs as integers - encoded with strategy specified in bytes 3-4
+2. The list of segment IDs as integers - encoded with strategy `II`
 
-**Format:**
-- Byte 1 (0x02): Use orientation + numid decomposition
-- Byte 2: Reserved (MUST be set to 0x00, ignored on read)
-- Bytes 3-4: Integer encoding strategy for segment IDs (e.g., 0x0100 for varint)
+**Byte assignments:**
+
+- First byte (`0x02`): Decomposition strategy (orientation + numid)
+- Second byte (`0x00`): Reserved (MUST be `0x00`, ignored on read)
+- Third byte (`II`): Integer encoding strategy for segment IDs
+- Fourth byte (`0x00`): Reserved (MUST be `0x00`)
+
+**Example:** Strategy code `0x02000100` = Bytes `[0x02, 0x00, 0x01, 0x00]` means:
+
+- First byte (`0x02`): Use orientation + numid decomposition
+- Second byte (`0x00`): Reserved
+- Third byte (`0x01`): Use varint for segment IDs
+- Fourth byte (`0x00`): Reserved
 
 **Layout:** `[orientation_bits][segment_ids_encoded]`
 
@@ -859,12 +1049,14 @@ We encode two components:
 **Minimum reader requirements:** A compliant BGFA reader MUST support all encodings:
 
 **Writer requirements:** A compliant BGFA writer:
+
 - MUST produce valid BGFA files that can be read by any compliant reader
 - MUST set reserved fields to 0
 - MUST NOT write empty blocks (blocks with `record_num = 0`). If a block type has no records, omit the block entirely.
 - MUST use encodings only within their valid ranges (e.g., delta encoding only for monotonically non-decreasing sequences)
 
 **Error handling:**
+
 - A reader encountering an unknown `section_id` MUST skip the block (using the block header to determine its size) without error.
 - A reader encountering an unknown strategy code MUST treat it as a fatal error.
 - A reader encountering truncated or corrupted data MUST treat it as a fatal error.
@@ -893,6 +1085,7 @@ L	B	-	C	+	3M
 ### Binary encoding (hex dump)
 
 **File Header (17 bytes):**
+
 ```
 42 47 46 41    # magic_number: "BGFA" (little-endian 0x41464742)
 00 00          # version: 0
@@ -903,6 +1096,7 @@ L	B	-	C	+	3M
 **Segments Block (section_id = 2):**
 
 Header:
+
 ```
 02             # section_id: 2 (segments)
 03 00          # record_num: 3
@@ -915,12 +1109,14 @@ Header:
 ```
 
 Payload - Names (concatenation with varint lengths):
+
 ```
 01 01 01       # lengths: 1, 1, 1 (varint)
 41 42 43       # blob: "ABC"
 ```
 
 Payload - Sequences (concatenation with varint lengths):
+
 ```
 04 04 04       # lengths: 4, 4, 4 (varint)
 41 43 47 54    # blob: "ACGT"
@@ -931,17 +1127,19 @@ Payload - Sequences (concatenation with varint lengths):
 **Links Block (section_id = 3):**
 
 Header:
+
 ```
 03             # section_id: 3 (links)
 02 00          # record_num: 2
 01 00          # compression_fromto: 0x0001 (varint)
 04 00 00 00    # compressed_fromto_len: 4 bytes
-00 00 00 01    # compression_cigars: 0x01000000 (identity decomposition, varint lengths, raw CIGAR string blob)
+01 00 00 01    # compression_cigars: 0x01000001 (identity decomposition, varint lengths, raw CIGAR string blob)
 06 00 00 00    # compressed_cigars_len: 6 bytes (2 varint lengths + 4 ASCII)
 08 00 00 00    # uncompressed_cigars_len: 8 bytes (sum of "4M"+"3M" lengths)
 ```
 
 Payload:
+
 ```
 01 02          # from_ids: 1, 2 (1-based: A=1, B=2)
 02 03          # to_ids: 2, 3 (1-based: B=2, C=3)
@@ -981,6 +1179,7 @@ W	walk1	0	S1	0	*	S1+S2-S3+
 ### Binary encoding (hex dump)
 
 **File Header (17 bytes):**
+
 ```
 42 47 46 41    # magic_number: "BGFA" (little-endian 0x41464742)
 00 00          # version: 0
@@ -991,6 +1190,7 @@ W	walk1	0	S1	0	*	S1+S2-S3+
 **Segments Block (section_id = 2):**
 
 Header:
+
 ```
 02             # section_id: 2 (segments)
 03 00          # record_num: 3
@@ -1003,12 +1203,14 @@ Header:
 ```
 
 Payload - Segment Names (concatenation with varint lengths):
+
 ```
 02 02 02       # lengths: 2, 2, 2 (varint)
 53 31 53 32 53 33  # blob: "S1S2S3"
 ```
 
 Payload - Sequences (concatenation with varint lengths):
+
 ```
 04 04 04       # lengths: 4, 4, 4 (varint)
 41 41 41 41    # blob: "AAAA"
@@ -1019,17 +1221,19 @@ Payload - Sequences (concatenation with varint lengths):
 **Links Block (section_id = 3):**
 
 Header:
+
 ```
 03             # section_id: 3 (links)
 02 00          # record_num: 2
 01 00          # compression_fromto: 0x0001 (varint)
 04 00 00 00    # compressed_fromto_len: 4 bytes
-00 00 00 01    # compression_cigars: 0x01000000 (identity decomposition, varint lengths, raw CIGAR string blob)
+01 00 00 01    # compression_cigars: 0x01000001 (identity decomposition, varint lengths, raw CIGAR string blob)
 06 00 00 00    # compressed_cigars_len: 6 bytes (2 varint lengths + 4 ASCII)
 08 00 00 00    # uncompressed_cigars_len: 8 bytes (sum of "4M"+"3M" lengths)
 ```
 
 Payload:
+
 ```
 01 02          # from_ids: 1, 2 (1-based: S1=1, S2=2)
 02 03          # to_ids: 2, 3 (1-based: S2=2, S3=3)
@@ -1042,27 +1246,30 @@ Payload:
 **Paths Block (section_id = 4):**
 
 Header:
+
 ```
 04             # section_id: 4 (paths)
 01 00          # record_num: 1
 01 00          # compression_path_names: 0x0001 (varint lengths, none for blob)
 06 00 00 00    # compressed_path_names_len: 6 bytes (1 varint length + 5 ASCII)
 05 00 00 00    # uncompressed_path_names_len: 5 bytes
-00 01 00 02    # compression_paths: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
+02 00 01 00    # compression_paths: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
 05 00 00 00    # compressed_paths_len: 5 bytes (1 varint length + 3 varint segment IDs + 1 byte orientations)
 03 00 00 00    # uncompressed_paths_len: 3 segment occurrences
-00 00 00 01    # compression_cigars: 0x01000000 (identity decomposition, varint lengths, raw CIGAR string blob)
+01 00 00 01    # compression_cigars: 0x01000001 (identity decomposition, varint lengths, raw CIGAR string blob)
 06 00 00 00    # compressed_len_cigar: 6 bytes (2 varint lengths + 4 ASCII)
 04 00 00 00    # uncompressed_len_cigar: 4 bytes (length of "4M3M")
 ```
 
 Payload - Path Names (concatenation with varint lengths):
+
 ```
 05             # length: 5 (varint)
 70 61 74 68 31 # blob: "path1"
 ```
 
 Payload - Paths (walks type with orientation + numid):
+
 ```
 03             # walks_lengths: [3] (varint, 1 path with 3 segments)
 01 02 03       # walks_segments: [1, 2, 3] (segment IDs as varint)
@@ -1070,6 +1277,7 @@ Payload - Paths (walks type with orientation + numid):
 ```
 
 Payload - Cigar Strings (concatenation with varint lengths):
+
 ```
 02 02          # lengths: 2, 2 (varint)
 34 4D 33 4D    # blob: "4M3M"
@@ -1078,6 +1286,7 @@ Payload - Cigar Strings (concatenation with varint lengths):
 **Walks Block (section_id = 5):**
 
 Header:
+
 ```
 05             # section_id: 5 (walks)
 01 00          # record_num: 1
@@ -1096,39 +1305,45 @@ Header:
 01 00          # compression_end_positions: 0x0001 (varint)
 01 00 00 00    # compressed_end_positions_len: 1 byte (1 varint)
 01 00 00 00    # uncompressed_end_positions_len: 1 byte
-00 01 00 02    # compression_walks: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
+02 00 01 00    # compression_walks: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
 10 00 00 00    # compressed_walk_len: 16 bytes (1 varint length + 7 varint segment IDs + 8 bytes orientations)
 07 00 00 00    # uncompressed_walk_len: 7 segment occurrences
 ```
 
 Payload - Sample IDs (concatenation with varint lengths):
+
 ```
 01 01          # lengths: 1, 1 (varint)
 30             # blob: "0"
 ```
 
 Payload - Haplotype Indices (varint):
+
 ```
 00             # value: 0 (varint)
 ```
 
 Payload - Sequence IDs (concatenation with varint lengths):
+
 ```
 02 02          # lengths: 2, 2 (varint)
 53 31 53 33    # blob: "S1S3"
 ```
 
 Payload - Start Positions (varint):
+
 ```
 00             # value: 0 (varint)
 ```
 
 Payload - End Positions (varint):
+
 ```
 2A             # value: 42 (varint, "*" in GFA means unrestricted, encoded as max value)
 ```
 
 Payload - Walks (walks type with orientation + numid):
+
 ```
 07             # walks_lengths: [7] (varint)
 01 02 03 02 01 02 03  # walks_segments: [1, 2, 3, 2, 1, 2, 3] (segment IDs as varint)
@@ -1144,5 +1359,5 @@ Payload - Walks (walks type with orientation + numid):
 3. Link 1: from segment 0 (S1), orientation + (bit 0), to segment 1 (S2), orientation + (bit 0)
 4. Link 2: from segment 1 (S2), orientation + (bit 0), to segment 2 (S3), orientation - (bit 1)
 5. Path "path1": contains segments [S1+, S2-, S3+] with CIGAR "4M3M"
-6. Walk "walk1": sample_id="0", haplotype_index=0, sequence_id="S3", start=0, end=42 (*), walk string="S1+S2-S3+S2-S1+S2-S3+"
+6. Walk "walk1": sample_id="0", haplotype_index=0, sequence_id="S3", start=0, end=42 (\*), walk string="S1+S2-S3+S2-S1+S2-S3+"
 7. Orientation bits are LSB-first: for walks_orientations, bit 0 = first segment (+), bit 1 = second segment (-), etc.

@@ -442,16 +442,6 @@ This would be encoded as:
 - `walks_segments`: [0, 1, 2] (segment IDs for both walks concatenated)
 - `walks_orientations`: [0, 1, 0] (0=+, 1=- for each segment, packed as bits)
 
-## Superstring and Concatenation Encoding
-
-The `strings` type supports two encoding modes for combining multiple strings into a single blob:
-
-**Concatenation:** All strings are concatenated end-to-end into a single byte sequence. The metadata stores the length of each string. To recover string _i_, the decoder reads `length[i]` bytes from the cumulative offset.
-
-**Superstring:** All strings are embedded within a single "superstring" constructed by a heuristic that minimizes total length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string _i_, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
-
-Both modes use the same 2-byte strategy code: the first byte encodes the integer strategy for the metadata (lengths or positions), and the second byte encodes the compression strategy for the blob.
-
 ## Walks and Paths: Type Note
 
 Both the Walks and Paths blocks use the `walks` type to encode sequences of oriented segment IDs. The encoding is identical in both cases: a list of walks, where each walk is a sequence of segment IDs with orientations.
@@ -464,6 +454,11 @@ The key difference is in the surrounding metadata:
 The `compression_walks` (Walks block) and `compression_paths` (Paths block) fields both use 4-byte strategy codes from the [Walks and Paths 4-byte Strategy Codes](#walks-and-paths-4-byte-strategy-codes) section.
 
 ## Strings Encoding strategies
+
+**Superstring:** A set of strings is embedded within a single "superstring" constructed by a heuristic that tries to
+minimize the overall length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string _i_, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
+
+The superstring is then encoded.
 
 When we have to encode a list of strings (the `strings` type), we choose the encoding strategy with a code consisting of
 two bytes.
@@ -480,42 +475,47 @@ For example, the code `0x0102` is used for method `0x01` (varint) for the length
 
 We use question marks `??` to represent that all values of the byte can be used.
 
-| Code     | Strategy        | Type     |
-| -------- | --------------- | -------- |
-| `0x00??` | none (identity) | `uints`  |
-| `0x01??` | varint          | `uints`  |
-| `0x02??` | fixed16         | `uints`  |
-| `0x03??` | delta           | `uints`  |
-| `0x04??` | elias gamma     | `uints`  |
-| `0x05??` | elias omega     | `uints`  |
-| `0x06??` | golomb          | `uints`  |
-| `0x07??` | rice            | `uints`  |
-| `0x08??` | streamvbyte     | `uints`  |
-| `0x09??` | vbyte           | `uints`  |
-| `0x0A??` | fixed32         | `uints`  |
-| `0x0B??` | fixed64         | `uints`  |
-| `0x??00` | none (identity) | `string` |
-| `0x??01` | zstd            | `string` |
-| `0x??02` | gzip            | `string` |
-| `0x??03` | lzma            | `string` |
-| `0x??04` | Huffman         | `string` |
-| `0x??05` | 2-bit           | `string` |
-| `0x??06` | Arithmetic      | `string` |
-| `0x??07` | bzip2           | `string` |
-| `0x??08` | RLE             | `string` |
-| `0x??0A` | Dictionary      | `string` |
-| `0x??0C` | LZ4             | `string` |
-| `0x??0D` | Brotli          | `string` |
-| `0x??0E` | PPM             | `string` |
+The following table contains the byte codes for the list of positions
 
-The superstring is computed with an heuristic that tries to minimize the length of the superstring of all strings, after removing the `\0`
-character that ends them.
+| Code   | Strategy        | Type    |
+| ------ | --------------- | ------- |
+| `0x00` | none (identity) | `uints` |
+| `0x01` | varint          | `uints` |
+| `0x02` | fixed16         | `uints` |
+| `0x03` | delta           | `uints` |
+| `0x04` | elias gamma     | `uints` |
+| `0x05` | elias omega     | `uints` |
+| `0x06` | golomb          | `uints` |
+| `0x07` | rice            | `uints` |
+| `0x08` | streamvbyte     | `uints` |
+| `0x09` | vbyte           | `uints` |
+| `0x0A` | fixed32         | `uints` |
+| `0x0B` | fixed64         | `uints` |
+
+The following table contains the byte codes for the supersting encoding
+
+| `0x00` | none (identity) | `string` |
+| ------ | --------------- | -------- |
+| `0x01` | zstd            | `string` |
+| `0x02` | gzip            | `string` |
+| `0x03` | lzma            | `string` |
+| `0x04` | Huffman         | `string` |
+| `0x05` | 2-bit           | `string` |
+| `0x06` | Arithmetic      | `string` |
+| `0x07` | bzip2           | `string` |
+| `0x08` | RLE             | `string` |
+| `0x0A` | Dictionary      | `string` |
+| `0x0C` | LZ4             | `string` |
+| `0x0D` | Brotli          | `string` |
+| `0x0E` | PPM             | `string` |
+
+Decoding a set of strings does not need to know the heuristic used to compute the superstring.
 
 ## Integer Encoding Algorithms
 
 This section defines the algorithms for integer encoding strategies referenced in the Strings Encoding strategies section (lines 302-353).
 
-### Delta (0x03??)
+### Delta (0x03)
 
 The delta encoding stores differences between consecutive values. This is particularly effective for sorted or monotonically increasing sequences.
 
@@ -532,7 +532,7 @@ The delta encoding stores differences between consecutive values. This is partic
 
 **Error handling:** A reader encountering a non-monotonic (decreasing) delta value during decoding MUST treat it as a fatal error.
 
-### Elias Gamma (0x04??)
+### Elias Gamma (0x04)
 
 Elias gamma encoding represents a number n using two parts:
 
@@ -552,7 +552,7 @@ Elias gamma encoding represents a number n using two parts:
 - n - 2^2 = 5 - 4 = 1 = 01 (2 bits)
 - Complete: 111001
 
-### Elias Omega (0x05??)
+### Elias Omega (0x05)
 
 Elias omega starts with 0 and builds up, using the previous code length.
 
@@ -565,7 +565,7 @@ Elias omega starts with 0 and builds up, using the previous code length.
   3. Recursively encode length of remaining bits using omega
   4. Append original bits
 
-### Golomb (0x06??)
+### Golomb (0x06)
 
 Golomb encoding uses a parameter b (default b=128).
 
@@ -578,7 +578,7 @@ Golomb encoding uses a parameter b (default b=128).
 
 **Default parameter:** b = 128
 
-### Rice (0x07??)
+### Rice (0x07)
 
 Rice coding is Golomb with b as a power of 2: b = 2^k.
 
@@ -596,7 +596,7 @@ Rice coding is Golomb with b as a power of 2: b = 2^k.
 - Parameter byte: 0x03
 - Encoded values follow the parameter byte
 
-### StreamVByte (0x08??)
+### StreamVByte (0x08)
 
 StreamVByte encodes multiple varints in parallel using SIMD-like packing.
 
@@ -605,7 +605,7 @@ StreamVByte encodes multiple varints in parallel using SIMD-like packing.
 - Control bytes indicate which varints use 1, 2, 3, or 4 bytes
 - Data bytes contain the varints packed together
 
-### VByte (0x09??)
+### VByte (0x09)
 
 Variable Byte encoding uses 7 bits per byte for data, with high bit as continuation flag.
 
@@ -668,7 +668,7 @@ A `bits` field represents a list of bits packed into `uint64` words in little-en
 
 - Word 0 = `0b...01101` (bit 0 = 1, bit 1 = 0, bit 2 = 1, bit 3 = 1, bit 4 = 0, ...)
 
-## Arithmetic Coding (0x??06)
+## Arithmetic Coding (0x06)
 
 **Format:**
 
@@ -683,7 +683,7 @@ The frequency table contains ONLY symbols with non-zero frequency. Each entry is
 
 The `frequency table size` field indicates the number of pairs in the table. Total frequency table size = `frequency_table_size * 5` bytes (1 byte symbol + 4 bytes frequency per entry).
 
-## Huffman Coding (0x??04, 0x??F4)
+## Huffman Coding (0x04, 0xF4)
 
 The Huffman encoding of a string (be it the concatenation or a superstring) consists of:
 
@@ -762,7 +762,7 @@ The decoder MUST decode exactly `2 * L` symbols, where `L` is the number of char
 
 3. **Alphabet Size**: The codebook always contains 16 entries (representing nibbles 0x0 through 0xF). A bit-length of 0 indicates the nibble is not present.
 
-## BWT + Huffman encoding (0x??07)
+## BWT + Huffman encoding (0x07)
 
 Burrows-Wheeler Transform + Huffman coding provides excellent compression for repetitive sequences like DNA. The pipeline is:
 
@@ -780,7 +780,7 @@ The block size is fixed at 65536 bytes (64KB).
   - `uint32`: block size
   - `bytes`: BWT-transformed data (MTF-encoded, then Huffman-encoded)
 
-## 2-bit DNA Encoding (0x??05)
+## 2-bit DNA Encoding (0x05)
 
 2-bit DNA encoding provides optimal compression for DNA/RNA sequences by encoding each nucleotide in 2 bits instead of 8 bits (75% size reduction). This is the most impactful encoding for pangenome data where sequences typically comprise 70-80% of file content.
 
@@ -824,7 +824,7 @@ Ambiguity codes (N, R, Y, K, M, S, W, B, D, H, V, -) and unknown characters are 
 
 **Primary Use Case:** Segment sequences, which are typically the largest data component in BGFA files.
 
-## Run-Length Encoding - RLE (0x??08)
+## Run-Length Encoding - RLE (0x08)
 
 Run-Length Encoding efficiently compresses sequences with repeated characters (homopolymers in DNA, repeated operations in other contexts). The implementation uses a hybrid mode that switches between raw and RLE encoding to prevent expansion on non-repetitive data.
 
@@ -854,7 +854,7 @@ Run-Length Encoding efficiently compresses sequences with repeated characters (h
 - Can be combined with 2-bit DNA encoding for additional compression
 - General string data with repeated characters
 
-## Dictionary Encoding (0x??0A)
+## Dictionary Encoding (0x0A)
 
 Dictionary encoding is optimized for repetitive string data by replacing repeated strings with short references to a dictionary.
 
@@ -879,7 +879,7 @@ Dictionary encoding is optimized for repetitive string data by replacing repeate
 - Path names with structural patterns
 - Any string list with high repetition
 
-## CIGAR-Specific Encoding (0x??09)
+## CIGAR-Specific Encoding (0x09)
 
 CIGAR strings represent sequence alignments with alternating numbers and operation letters. This encoding exploits the structure of CIGAR strings to achieve better compression than general-purpose methods.
 

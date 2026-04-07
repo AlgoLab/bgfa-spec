@@ -269,9 +269,9 @@ incrementing integer starting at 0. Segment IDs are assigned in the order segmen
 | `compression_segment_names`      | Encoding strategy for the segment names (2 bytes)           | `bytes[2]` |
 | `compressed_segment_names_len`   | length of compressed segment names field                    | `uint64`   |
 | `uncompressed_segment_names_len` | sum of the lengths of the uncompressed segment names        | `uint64`   |
-| `compression_segment_str`        | Encoding strategy for the segment sequences (2 bytes)       | `bytes[2]` |
-| `compressed_segment_str_len`     | length of compressed segment_sequences field                | `uint64`   |
-| `uncompressed_segment_str_len`   | sum of the lengths of uncompressed segment_sequences fields | `uint64`   |
+| `compression_segment_label`      | Encoding strategy for the segment sequences (2 bytes)       | `bytes[2]` |
+| `compressed_segment_label_len`   | length of compressed segment_sequences field                | `uint64`   |
+| `uncompressed_segment_label_len` | sum of the lengths of uncompressed segment_sequences fields | `uint64`   |
 
 The length of the uncompressed segment names does not include any terminator character.
 
@@ -341,14 +341,14 @@ The following is the sequence of fields making up the header.
 | `section_id`                   | Section type (4 = paths)                                         | `uint8`    |
 | `record_num`                   | number of records in the block                                   | `uint16`   |
 | `compression_path_names`       | Encoding strategy for the path names (2 bytes)                   | `bytes[2]` |
-| `compressed_path_names_len`    | length of compressed concatenated path names                     | `uint64`   |
-| `uncompressed_path_names_len`  | length of uncompressed concatenated path names                   | `uint64`   |
+| `compressed_path_names_len`    | length of compressed path names                                  | `uint64`   |
+| `uncompressed_path_names_len`  | length of uncompressedpath names                                 | `uint64`   |
 | `compression_paths`            | Encoding strategy for the paths as list of segment IDs (4 bytes) | `bytes[4]` |
 | `compressed_paths_len`         | length of compressed paths                                       | `uint64`   |
 | `uncompressed_paths_len`       | sum of the lengths of uncompressed paths (as segment ID strings) | `uint64`   |
 | `compression_paths_cigars`     | Encoding strategy for the cigar strings (4 bytes)                | `bytes[4]` |
-| `compressed_paths_len_cigar`   | length of compressed concatenated cigars                         | `uint64`   |
-| `uncompressed_paths_len_cigar` | sum of the lengths of uncompressed concatenated cigars strings   | `uint64`   |
+| `compressed_paths_len_cigar`   | length of compressed cigars                                      | `uint64`   |
+| `uncompressed_paths_len_cigar` | sum of the lengths of uncompressedcigars strings                 | `uint64`   |
 
 #### Payload
 
@@ -456,7 +456,7 @@ The `compression_walks` (Walks block) and `compression_paths` (Paths block) fiel
 ## Strings Encoding strategies
 
 **Superstring:** A set of strings is embedded within a single "superstring" constructed by a heuristic that tries to
-minimize the overall length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string _i_, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
+minimize the overall length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string _i_, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions). **Note: Strings are never concatenated directly; all string sets are encoded via this superstring approach.**
 
 The superstring is then encoded.
 
@@ -619,20 +619,14 @@ Variable Byte encoding uses 7 bits per byte for data, with high bit as continuat
 The payload of the encoded `strings` consists of:
 
 1.  **Metadata**: A list of numbers, encoded according to the first-byte strategy (varint, fixed16, etc).
-    - For **Concatenation**: This list contains the lengths of each string.
-    - For **Superstring**: This list contains first all start positions, then all end positions of the strings.
+    This list contains first all start positions, then all end positions of the strings.
 
-    The first-byte strategy determines how this list of numbers is encoded. For superstring encoding, start and end positions are encoded independently using the same strategy.
+    The first-byte strategy determines how this list of numbers is encoded.
+    Start and end positions are encoded independently using the same strategy.
 
-2.  **Blob**: The superstring or the concatenated string, encoded according to the second-byte strategy.
+2.  **Blob**: The superstring is encoded according to the second-byte strategy.
 
-**Layout for Concatenation encoding:**
-
-```
-[length_0][length_1]...[length_n-1][blob]
-```
-
-**Layout for Superstring encoding:**
+Layout:
 
 ```
 [start_0][start_1]...[start_n-1][end_0][end_1]...[end_n-1][blob]
@@ -685,7 +679,7 @@ The `frequency table size` field indicates the number of pairs in the table. Tot
 
 ## Huffman Coding (0x04, 0xF4)
 
-The Huffman encoding of a string (be it the concatenation or a superstring) consists of:
+The Huffman encoding of a string consists of:
 
 | Name              | Description                             | Type     |
 | ----------------- | --------------------------------------- | -------- |
@@ -754,7 +748,7 @@ The decoder MUST decode exactly `2 * L` symbols, where `L` is the number of char
 
 ### Nibble-Level Processing
 
-1. **Symbol Extraction**: Each byte of the target string (the concatenated string or the superstring) is treated as two 4-bit symbols:
+1. **Symbol Extraction**: Each byte of the target string (the superstring) is treated as two 4-bit symbols:
    - Symbol A: High nibble (bits 4-7)
    - Symbol B: Low nibble (bits 0-3)
 
@@ -1060,304 +1054,3 @@ We encode two components:
 - A reader encountering an unknown `section_id` MUST skip the block (using the block header to determine its size) without error.
 - A reader encountering an unknown strategy code MUST treat it as a fatal error.
 - A reader encountering truncated or corrupted data MUST treat it as a fatal error.
-
----
-
-## Appendix A: Example BGFA Files
-
-This appendix shows complete BGFA files encoding example graphs.
-
-### Appendix A.1: Minimal BGFA File
-
-This appendix shows a complete minimal BGFA file encoding a simple graph with 3 segments and 2 links.
-
-### Source GFA1 text
-
-```gfa
-H	VN:Z:1.0
-S	A	ACGT
-S	B	GCCA
-S	C	TAAC
-L	A	+	B	+	4M
-L	B	-	C	+	3M
-```
-
-### Binary encoding (hex dump)
-
-**File Header (17 bytes):**
-
-```
-42 47 46 41    # magic_number: "BGFA" (little-endian 0x41464742)
-00 00          # version: 0
-09 00          # header_len: 9 bytes
-56 4E 3A 5A 3A 31 2E 30 00  # header: "VN:Z:1.0" + null terminator
-```
-
-**Segments Block (section_id = 2):**
-
-Header:
-
-```
-02             # section_id: 2 (segments)
-03 00          # record_num: 3
-01 00          # compression_names: 0x0001 (varint lengths, none for blob)
-06 00 00 00    # compressed_names_len: 6 bytes (3 varint lengths + 3 ASCII)
-03 00 00 00    # uncompressed_names_len: 3 bytes
-01 00          # compression_str: 0x0001 (varint lengths, none for blob)
-0F 00 00 00    # compressed_str_len: 15 bytes (3 varint lengths + 12 ASCII)
-0C 00 00 00    # uncompressed_str_len: 12 bytes
-```
-
-Payload - Names (concatenation with varint lengths):
-
-```
-01 01 01       # lengths: 1, 1, 1 (varint)
-41 42 43       # blob: "ABC"
-```
-
-Payload - Sequences (concatenation with varint lengths):
-
-```
-04 04 04       # lengths: 4, 4, 4 (varint)
-41 43 47 54    # blob: "ACGT"
-47 43 43 41    # blob: "GCCA"
-54 41 41 43    # blob: "TAAC"
-```
-
-**Links Block (section_id = 3):**
-
-Header:
-
-```
-03             # section_id: 3 (links)
-02 00          # record_num: 2
-01 00          # compression_fromto: 0x0001 (varint)
-04 00 00 00    # compressed_fromto_len: 4 bytes
-01 00 00 01    # compression_cigars: 0x01000001 (identity decomposition, varint lengths, raw CIGAR string blob)
-06 00 00 00    # compressed_cigars_len: 6 bytes (2 varint lengths + 4 ASCII)
-08 00 00 00    # uncompressed_cigars_len: 8 bytes (sum of "4M"+"3M" lengths)
-```
-
-Payload:
-
-```
-01 02          # from_ids: 1, 2 (1-based: A=1, B=2)
-02 03          # to_ids: 2, 3 (1-based: B=2, C=3)
-00             # from_orientation: bits [0, 0] = 0x00 (both +)
-02             # to_orientation: bits [0, 1] = 0x02 (first +, second -)
-04 03          # cigar lengths: 4, 3 (varint)
-34 4D 33 4D    # cigar blob: "4M3M"
-```
-
-**Total file size:** ~100 bytes
-
-### Decoding notes
-
-1. Segment IDs are assigned in order of appearance: A=0, B=1, C=2 (0-based internal IDs)
-2. In the links payload, IDs are stored as 1-based: A=1, B=2, C=3. The reader converts back to 0-based by subtracting 1.
-3. Link 1: from segment 0 (A), orientation + (bit 0), to segment 1 (B), orientation + (bit 0)
-4. Link 2: from segment 1 (B), orientation + (bit 0), to segment 2 (C), orientation - (bit 1)
-5. Orientation bits are LSB-first: for to_orientation, bit 0 = first link (+), bit 1 = second link (-), giving 0b10 = 0x02
-
-## Appendix A.2: Complex BGFA File with Paths and Walks
-
-This appendix shows a more complex BGFA file encoding a graph with segments, links, a path, and a walk to demonstrate additional features.
-
-### Source GFA1 text
-
-```gfa
-H	VN:Z:1.0
-S	S1	AAAA
-S	S2	TTTT
-S	S3	CCCC
-L	S1	+	S2	+	4M
-L	S2	-	S3	+	3M
-P	path1	S1+,S2-,S3+	4M3M
-W	walk1	0	S1	0	*	S1+S2-S3+
-```
-
-### Binary encoding (hex dump)
-
-**File Header (17 bytes):**
-
-```
-42 47 46 41    # magic_number: "BGFA" (little-endian 0x41464742)
-00 00          # version: 0
-09 00          # header_len: 9 bytes
-56 4E 3A 5A 3A 31 2E 30 00  # header: "VN:Z:1.0" + null terminator
-```
-
-**Segments Block (section_id = 2):**
-
-Header:
-
-```
-02             # section_id: 2 (segments)
-03 00          # record_num: 3
-01 00          # compression_segment_names: 0x0001 (varint lengths, none for blob)
-06 00 00 00    # compressed_segment_names_len: 6 bytes
-03 00 00 00    # uncompressed_segment_names_len: 3 bytes
-01 00          # compression_sequences: 0x0001 (varint lengths, none for blob)
-0C 00 00 00    # compressed_sequences_len: 12 bytes
-0C 00 00 00    # uncompressed_sequences_len: 12 bytes
-```
-
-Payload - Segment Names (concatenation with varint lengths):
-
-```
-02 02 02       # lengths: 2, 2, 2 (varint)
-53 31 53 32 53 33  # blob: "S1S2S3"
-```
-
-Payload - Sequences (concatenation with varint lengths):
-
-```
-04 04 04       # lengths: 4, 4, 4 (varint)
-41 41 41 41    # blob: "AAAA"
-54 54 54 54    # blob: "TTTT"
-43 43 43 43    # blob: "CCCC"
-```
-
-**Links Block (section_id = 3):**
-
-Header:
-
-```
-03             # section_id: 3 (links)
-02 00          # record_num: 2
-01 00          # compression_fromto: 0x0001 (varint)
-04 00 00 00    # compressed_fromto_len: 4 bytes
-01 00 00 01    # compression_cigars: 0x01000001 (identity decomposition, varint lengths, raw CIGAR string blob)
-06 00 00 00    # compressed_cigars_len: 6 bytes (2 varint lengths + 4 ASCII)
-08 00 00 00    # uncompressed_cigars_len: 8 bytes (sum of "4M"+"3M" lengths)
-```
-
-Payload:
-
-```
-01 02          # from_ids: 1, 2 (1-based: S1=1, S2=2)
-02 03          # to_ids: 2, 3 (1-based: S2=2, S3=3)
-00             # from_orientation: bits [0, 0] = 0x00 (both +)
-02             # to_orientation: bits [0, 1] = 0x02 (first +, second -)
-04 03          # cigar lengths: 4, 3 (varint)
-34 4D 33 4D    # cigar blob: "4M3M"
-```
-
-**Paths Block (section_id = 4):**
-
-Header:
-
-```
-04             # section_id: 4 (paths)
-01 00          # record_num: 1
-01 00          # compression_path_names: 0x0001 (varint lengths, none for blob)
-06 00 00 00    # compressed_path_names_len: 6 bytes (1 varint length + 5 ASCII)
-05 00 00 00    # uncompressed_path_names_len: 5 bytes
-02 00 01 00    # compression_paths: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
-05 00 00 00    # compressed_paths_len: 5 bytes (1 varint length + 3 varint segment IDs + 1 byte orientations)
-03 00 00 00    # uncompressed_paths_len: 3 segment occurrences
-01 00 00 01    # compression_cigars: 0x01000001 (identity decomposition, varint lengths, raw CIGAR string blob)
-06 00 00 00    # compressed_len_cigar: 6 bytes (2 varint lengths + 4 ASCII)
-04 00 00 00    # uncompressed_len_cigar: 4 bytes (length of "4M3M")
-```
-
-Payload - Path Names (concatenation with varint lengths):
-
-```
-05             # length: 5 (varint)
-70 61 74 68 31 # blob: "path1"
-```
-
-Payload - Paths (walks type with orientation + numid):
-
-```
-03             # walks_lengths: [3] (varint, 1 path with 3 segments)
-01 02 03       # walks_segments: [1, 2, 3] (segment IDs as varint)
-02             # walks_orientations: bits [0, 1, 0] LSB-first = 0x02 (+,-,+)
-```
-
-Payload - Cigar Strings (concatenation with varint lengths):
-
-```
-02 02          # lengths: 2, 2 (varint)
-34 4D 33 4D    # blob: "4M3M"
-```
-
-**Walks Block (section_id = 5):**
-
-Header:
-
-```
-05             # section_id: 5 (walks)
-01 00          # record_num: 1
-01 00          # compression_sample_ids: 0x0001 (varint lengths, none for blob)
-02 00 00 00    # compressed_sample_ids_len: 2 bytes (1 varint length + 1 ASCII)
-01 00 00 00    # uncompressed_sample_ids_len: 1 byte
-01 00          # compression_haplotype_indices: 0x0001 (varint)
-01 00 00 00    # compressed_haplotype_indices_len: 1 byte (1 varint)
-01 00 00 00    # uncompressed_haplotype_indices_len: 1 byte
-01 00          # compression_sequence_ids: 0x0001 (varint lengths, none for blob)
-06 00 00 00    # compressed_sequence_ids_len: 6 bytes (2 varint lengths + 4 ASCII)
-04 00 00 00    # uncompressed_sequence_ids_len: 4 bytes
-01 00          # compression_start_positions: 0x0001 (varint)
-01 00 00 00    # compressed_start_positions_len: 1 byte (1 varint)
-01 00 00 00    # uncompressed_start_positions_len: 1 byte
-01 00          # compression_end_positions: 0x0001 (varint)
-01 00 00 00    # compressed_end_positions_len: 1 byte (1 varint)
-01 00 00 00    # uncompressed_end_positions_len: 1 byte
-02 00 01 00    # compression_walks: 0x02000100 (orientation + numid, varint for segment IDs, none for string)
-10 00 00 00    # compressed_walk_len: 16 bytes (1 varint length + 7 varint segment IDs + 8 bytes orientations)
-07 00 00 00    # uncompressed_walk_len: 7 segment occurrences
-```
-
-Payload - Sample IDs (concatenation with varint lengths):
-
-```
-01 01          # lengths: 1, 1 (varint)
-30             # blob: "0"
-```
-
-Payload - Haplotype Indices (varint):
-
-```
-00             # value: 0 (varint)
-```
-
-Payload - Sequence IDs (concatenation with varint lengths):
-
-```
-02 02          # lengths: 2, 2 (varint)
-53 31 53 33    # blob: "S1S3"
-```
-
-Payload - Start Positions (varint):
-
-```
-00             # value: 0 (varint)
-```
-
-Payload - End Positions (varint):
-
-```
-2A             # value: 42 (varint, "*" in GFA means unrestricted, encoded as max value)
-```
-
-Payload - Walks (walks type with orientation + numid):
-
-```
-07             # walks_lengths: [7] (varint)
-01 02 03 02 01 02 03  # walks_segments: [1, 2, 3, 2, 1, 2, 3] (segment IDs as varint)
-2A             # walks_orientations: bits [0,1,0,1,0,1,0] LSB-first = 0x2A (+,-,+,-,+,-,+)
-```
-
-**Total file size:** ~200 bytes
-
-### Decoding notes
-
-1. Segment IDs are assigned in order of appearance: S1=0, S2=1, S3=2 (0-based internal IDs)
-2. In the links and paths payloads, IDs are stored as 1-based: S1=1, S2=2, S3=3. The reader converts back to 0-based by subtracting 1.
-3. Link 1: from segment 0 (S1), orientation + (bit 0), to segment 1 (S2), orientation + (bit 0)
-4. Link 2: from segment 1 (S2), orientation + (bit 0), to segment 2 (S3), orientation - (bit 1)
-5. Path "path1": contains segments [S1+, S2-, S3+] with CIGAR "4M3M"
-6. Walk "walk1": sample_id="0", haplotype_index=0, sequence_id="S3", start=0, end=42 (\*), walk string="S1+S2-S3+S2-S1+S2-S3+"
-7. Orientation bits are LSB-first: for walks_orientations, bit 0 = first segment (+), bit 1 = second segment (-), etc.

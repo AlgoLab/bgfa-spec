@@ -1051,6 +1051,6 @@ We encode two components:
 
 **Error handling:**
 
-- A reader encountering an unknown `section_id` MUST skip the block (using the block header to determine its size) without error.
+- A reader encountering an unknown `section_id` MUST treat it as a fatal error.
 - A reader encountering an unknown strategy code MUST treat it as a fatal error.
 - A reader encountering truncated or corrupted data MUST treat it as a fatal error.

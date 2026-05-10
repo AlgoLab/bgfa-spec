@@ -9,7 +9,6 @@ It covers integer encoding, string encoding, and specialized encodings used in b
   - [Superstring](#superstring)
   - [Payload Layout for `strings`](#payload-layout-for-strings)
 - [Integer Encoding Algorithms](#integer-encoding-algorithms)
-  - [Delta (0x03)](#delta-0x03)
   - [Elias Gamma (0x04)](#elias-gamma-0x04)
   - [Elias Omega (0x05)](#elias-omega-0x05)
   - [Golomb (0x06)](#golomb-0x06)
@@ -27,6 +26,7 @@ It covers integer encoding, string encoding, and specialized encodings used in b
 - [CIGAR 4-byte Strategy Code Details](#cigar-4-byte-strategy-code-details)
   - [numOperations + lengths + operations (0x01??????)](#numoperations--lengths--operations-0x01)
   - [string (0x02??????)](#string-0x02)
+- [Bits encoding](#bits-encoding)
 
 ## String Encoding Overview
 
@@ -74,6 +74,16 @@ The `uncompressed_len` field is the sum of the lengths of the original strings (
 
 ## Integer Encoding Algorithms
 
+A list of singed integers is encoded by two parts:
+
+- the signs of all integers
+- the absolute values of all integers (unsigned ints). The encoding strategy applies to this part only.
+
+The signs are considered a sequence of bits, where + is encoded as 0 and - is encoded with 1. How to encoded a
+sequence of bits is described at [Bits encoding](#bits-encoding)
+
+The encodings of unsigned ints are the following.
+
 ### Varint (0x01)
 
 Variable-length integer encoding optimized for small values.
@@ -86,23 +96,6 @@ Variable-length integer encoding optimized for small values.
 ### Fixed16 (0x02)
 
 Each integer is encoded as a fixed 16-bit little-endian value.
-
-### Delta (0x03)
-
-The delta encoding stores differences between consecutive values. This is particularly effective for sorted or monotonically increasing sequences.
-
-**Format:**
-
-- First value stored as-is using the integer encoding method indicated by the strategy code
-- Subsequent values stored as: value[i] - value[i-1]
-- The decoder adds each delta to the previous reconstructed value
-
-**Example:** Sequence [100, 105, 108, 110] encoded as delta:
-
-- Stored: [100, 5, 3, 2]
-- Decoded: [100, 100+5=105, 105+3=108, 108+2=110]
-
-**Error handling:** A reader encountering a non-monotonic (decreasing) delta value during decoding MUST treat it as a fatal error.
 
 ### Elias Gamma (0x04)
 
@@ -525,4 +518,16 @@ The CIGAR strings are compressed as a single block, separated by newlines, using
 - Third byte (`0x00`): No integer encoding (string mode)
 - Fourth byte (`0x03`): Use LZMA to compress the newline-separated CIGAR strings
 
+## Bits encoding
 
+A sequence of bits is run-length encoded, specialized to bits.
+The encoding is a list of lengths [L(1), L(2), ... , L(k)] where
+L(1) is the length of the leading zeroes in the sequence. L(1) = 0 if the first bit of the sequence is 1.
+L(2) is the length of the ones in the sequence immediately after the first L(1) bits, minus 1.
+L(3) is the length of the zeroes in the sequence immediately after the first L(1) + L(2) + 1 bits, minus 1.
+
+For example the sequence of bits 00011010110101001 is encoded as
+[3, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], since the run-lengths are
+[3, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1].
+
+Since those numbers are positive, they are always encoded as varint.

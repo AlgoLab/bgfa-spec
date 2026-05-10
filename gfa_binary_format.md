@@ -306,7 +306,7 @@ Bytes: [HH, LL]
 - Used for: String lists
 - Examples:
   - `0x0102` = Bytes `[01, 02]` (Varint metadata + Fixed16 blob)
-  - `0x0304` = Bytes `[03, 04]` (Delta metadata + LZMA blob)
+  - `0x0104` = Bytes `[01, 04]` (Varing metadata + LZMA blob)
 
 **2-byte Strategy Codes (Walks/Paths):**
 
@@ -319,7 +319,7 @@ Bytes: [HH, LL]
 - `LL`: Integer encoding method for the segment IDs
 - Examples:
   - `0x0102` = Bytes `[01, 02]` (Varint metadata + Fixed16 for the segment IDs)
-  - `0x0304` = Bytes `[03, 04]` (Delta metadata + elias gamma for the segment IDs)
+  - `0x0104` = Bytes `[01, 04]` (Varint metadata + elias gamma for the segment IDs)
 
 **4-byte Strategy Codes (CIGAR):**
 
@@ -356,7 +356,6 @@ The following tables map strategy code byte values to encoding methods. Implemen
 | `0x00` | none (identity) |
 | `0x01` | varint          |
 | `0x02` | fixed16         |
-| `0x03` | delta           |
 | `0x04` | elias gamma     |
 | `0x05` | elias omega     |
 | `0x06` | golomb          |
@@ -542,7 +541,6 @@ A `bits` field represents a list of bits packed into `uint64` words in little-en
 - MUST produce valid BGFA files that can be read by any compliant reader
 - MUST set reserved fields to 0
 - MUST NOT write empty blocks (blocks with `record_num = 0`). If a block type has no records, omit the block entirely.
-- MUST use encodings only within their valid ranges (e.g., delta encoding only for monotonically non-decreasing sequences)
 
 **Error handling:**
 

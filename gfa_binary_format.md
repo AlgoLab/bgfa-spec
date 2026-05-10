@@ -23,7 +23,7 @@
 - [Walks Block](#walks-block)
 - [Walks Type Format](#walks-type-format)
 - [Walks and Paths: Type Note](#walks-and-paths-type-note)
-- [Bits](#bits)
+- [Packed Bits](#packed-bits)
 - [Conformance Requirements](#conformance-requirements)
 - [Appendix A: Example BGFA Files](#appendix-a-example-bgfa-files)
 
@@ -71,7 +71,7 @@ To read a block from a BGFA file, a reader follows these steps:
 1. **Read the block header**: Parse the `section_id` (1 byte) to determine the block type, then parse the remaining header fields according to the block type's header layout.
 2. **Determine payload size**: The total payload size is the sum of all `compressed_*_len` fields in the header. Each `compressed_*_len` includes both the integer metadata list and the compressed blob for that field.
 3. **Parse each payload field**: For each field, use the strategy code to determine how to decode it. The strategy
-   codes are different, depending on the type of data we want to store. For `strings` fields, read the metadata (integer positions list encoded per the first-byte strategy), then read the compressed blob (encoded per the second-byte strategy). For `uints` fields, the entire payload is the integer list encoded per the strategy code. For `bits` fields, read raw bits using the known bit count (see [Bits](#bits)).
+   codes are different, depending on the type of data we want to store. For `strings` fields, read the metadata (integer positions list encoded per the first-byte strategy), then read the compressed blob (encoded per the second-byte strategy). For `uints` fields, the entire payload is the integer list encoded per the strategy code. For `uints-delta` fields, the entire payload is the signed integer encoded delta list (see [Signed Integers](encoding_algorithms.md#signed-integers)). For `bits` fields, read raw bits using the known bit count (see [Packed Bits](#packed-bits)).
 4. **Reconstruct data**: Use the metadata and strategy codes to decode each field back to its original form.
 
 For implementation details of each encoding method, see [encoding_algorithms.md](encoding_algorithms.md).
@@ -152,8 +152,8 @@ length is 20 bytes.
 
 | Field                 | Description                                       | Type                         |
 | --------------------- | ------------------------------------------------- | ---------------------------- |
-| `from_ids`            | Tail segment IDs (1-based; 0 = no connection)     | `uints`                      |
-| `to_ids`              | Head segment IDs (1-based; 0 = no connection)     | `uints`                      |
+| `from_ids`            | Tail segment IDs (1-based; 0 = no connection)     | `uints-delta`                |
+| `to_ids`              | Head segment IDs (1-based; 0 = no connection)     | `uints-delta`                |
 | `from_orientation`    | Orientations of all from segments. 0 is +, 1 is - | `bits` (length = record_num) |
 | `to_orientation`      | Orientations of all to segments. 0 is +, 1 is -   | `bits` (length = record_num) |
 | `links_cigar_strings` | CIGAR strings                                     | `cigar strings`              |
@@ -237,14 +237,14 @@ The following is the sequence of fields making up the header.
 
 The following is the sequence of fields making up the payload layout.
 
-| Field               | Description                                            | Type      |
-| ------------------- | ------------------------------------------------------ | --------- |
-| `sample_ids`        | Sample IDs                                             | `strings` |
-| `haplotype_indices` | Haplotype indices                                      | `uints`   |
-| `sequence_ids`      | Sequence IDs                                           | `strings` |
-| `start_positions`   | Start positions                                        | `uints`   |
-| `end_positions`     | End positions                                          | `uints`   |
-| `walks`             | Walks, each walk is a sequence of oriented segment IDs | `walks`   |
+| Field               | Description                                            | Type          |
+| ------------------- | ------------------------------------------------------ | ------------- |
+| `sample_ids`        | Sample IDs                                             | `strings`     |
+| `haplotype_indices` | Haplotype indices                                      | `uints`       |
+| `sequence_ids`      | Sequence IDs                                           | `strings`     |
+| `start_positions`   | Start positions                                        | `uints-delta` |
+| `end_positions`     | End positions                                          | `uints-delta` |
+| `walks`             | Walks, each walk is a sequence of oriented segment IDs | `walks`       |
 
 Since there are `record_num` records in the block, the block contains `record_num` sample IDs, followed by `record_num`
 haplotype indices, followed by `record_num` sequence IDs, followed by `record_num` start positions, followed by
@@ -270,9 +270,10 @@ Input strings to the `strings` type do NOT include null terminators. Strings are
 ### Type Definitions
 
 - `uints`: A list of unsigned integers encoded according to the specified integer encoding strategy (see [Encoding Method Reference](#encoding-method-reference)).
+- `uints-delta`: A list of unsigned integers encoded as delta differences. The first value is stored as-is; each subsequent value is the difference with the previous value. The resulting signed integers are encoded according to the signed integer encoding strategy (see [Signed Integers](encoding_algorithms.md#signed-integers)).
 - `strings`: A list of strings encoded according to the string encoding strategy. See [String Encoding Overview](encoding_algorithms.md#string-encoding-overview) for the encoding approach.
 - `cigar strings`: A list of CIGAR strings encoded according to the cigar encoding strategy (see [CIGAR-Specific Encoding](encoding_algorithms.md#cigar-specific-encoding-0x09)).
-- `bits`: A list of bits packed into uint64 words (see [Bits](#bits)).
+- `bits`: A list of bits packed into uint64 words (see [Packed Bits](#packed-bits)).
 - `walks`: A list of walks, where each walk is a sequence of oriented segment IDs (see [Walks Type Format](#walks-type-format)).
 
 ### Strategy Code Format Summary
@@ -464,12 +465,12 @@ The `walks` type encodes a list of walks, where each walk is a sequence of orien
 Since we know that there are `record_num` walks in the block, we do not have to store that information again.
 The `walks` layout is made by the following sequence of fields.
 
-| Field                | Description                   | Type    |
-| -------------------- | ----------------------------- | ------- |
-| `walks_lengths`      | The lengths of the walks      | `uints` |
-| `walks_segments`     | The segment IDs of the walks  | `uints` |
-| `walks_orientations` | The orientations of the walks | `bits`  |
-|                      |                               |         |
+| Field                | Description                                                                             | Type          |
+| -------------------- | --------------------------------------------------------------------------------------- | ------------- |
+| `walks_lengths`      | The lengths of the walks                                                                | `uints`       |
+| `walks_segments`     | The segment IDs of the walks, delta-encoded (see [Type Definitions](#type-definitions)) | `uints-delta` |
+| `walks_orientations` | The orientations of the walks                                                           | `bits`        |
+|                      |                                                                                         |               |
 
 - All lengths of the walks are followed by all segment IDs of the walks, followed by all walks orientations.
 - The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` from the containing block header.
@@ -480,12 +481,9 @@ The `walks` layout is made by the following sequence of fields.
 
 - `walks_lengths` are encoded using the integer encoding strategy specified in the first byte of the `compression_walks`
   field in the containing block header.
-- `walks_segments` are encoded using the integer encoding strategy specified in the second byte of the `compression_walks`
-  field in the containing block header. The values encoded are the difference between the current segment ID and the
-  previous segment ID. For the first segment ID, we store the actual ID instead of the difference with the previous
-  ID.
-  For example, for the sequence of segment IDs [50, 48, 61] we encode the integers [50, -2, 13]
-- the `walks_orientations` field is always encoded as a bit sequence [Bits encoding](#bits).
+- `walks_segments` are encoded using the `uints-delta` type, which applies signed integer encoding (see [Signed Integers](encoding_algorithms.md#signed-integers)). The integer encoding strategy is specified in the second byte of the `compression_walks` field in the containing block header and applies to the absolute values of the deltas. The values encoded are the difference between the current segment ID and the previous segment ID. For the first segment ID, we store the actual ID instead of the difference with the previous ID.
+  For example, for the sequence of segment IDs [50, 48, 61] we compute deltas [50, -2, 13]. The sign bits are [0, 1, 0] and the absolute values [50, 2, 13] are encoded per the integer strategy.
+- the `walks_orientations` field is always encoded as a bit sequence [Packed Bits](#packed-bits).
 
 **Example:** Consider a walks block with 2 walks:
 
@@ -509,7 +507,7 @@ The key difference is in the surrounding metadata:
 
 The `compression_walks` (Walks block) and `compression_paths` (Paths block) fields both use 2-byte strategy codes from the [Encoding Method Reference](#encoding-method-reference).
 
-## Bits
+## Packed Bits
 
 A `bits` field represents a list of bits packed into `uint64` words in little-endian format.
 

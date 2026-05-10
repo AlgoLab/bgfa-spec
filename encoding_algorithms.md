@@ -9,6 +9,7 @@ It covers integer encoding, string encoding, and specialized encodings used in b
   - [Superstring](#superstring)
   - [Payload Layout for `strings`](#payload-layout-for-strings)
 - [Integer Encoding Algorithms](#integer-encoding-algorithms)
+  - [Signed Integers](#signed-integers)
   - [Elias Gamma (0x04)](#elias-gamma-0x04)
   - [Elias Omega (0x05)](#elias-omega-0x05)
   - [Golomb (0x06)](#golomb-0x06)
@@ -26,7 +27,7 @@ It covers integer encoding, string encoding, and specialized encodings used in b
 - [CIGAR 4-byte Strategy Code Details](#cigar-4-byte-strategy-code-details)
   - [numOperations + lengths + operations (0x01??????)](#numoperations--lengths--operations-0x01)
   - [string (0x02??????)](#string-0x02)
-- [Bits encoding](#bits-encoding)
+- [Run-Length Bits Encoding](#run-length-bits-encoding)
 
 ## String Encoding Overview
 
@@ -74,13 +75,17 @@ The `uncompressed_len` field is the sum of the lengths of the original strings (
 
 ## Integer Encoding Algorithms
 
-A list of singed integers is encoded by two parts:
+### Signed Integers
+
+A list of signed integers is encoded by two parts:
 
 - the signs of all integers
 - the absolute values of all integers (unsigned ints). The encoding strategy applies to this part only.
 
-The signs are considered a sequence of bits, where + is encoded as 0 and - is encoded with 1. How to encoded a
-sequence of bits is described at [Bits encoding](#bits-encoding)
+The signs are considered a sequence of bits, where + is encoded as 0 and - is encoded with 1.
+The i-th bit in the sign bitstream corresponds to the sign of the i-th integer in the list.
+Zero values are treated as positive (sign bit 0).
+The encoding of a sequence of bits is described at [Run-Length Bits Encoding](#run-length-bits-encoding).
 
 The encodings of unsigned ints are the following.
 
@@ -518,7 +523,7 @@ The CIGAR strings are compressed as a single block, separated by newlines, using
 - Third byte (`0x00`): No integer encoding (string mode)
 - Fourth byte (`0x03`): Use LZMA to compress the newline-separated CIGAR strings
 
-## Bits encoding
+## Run-Length Bits Encoding
 
 A sequence of bits is run-length encoded, specialized to bits.
 The encoding is a list of lengths [L(1), L(2), ... , L(k)] where

@@ -525,7 +525,6 @@ A `bits` field represents a list of bits packed into `uint64` words in little-en
 
 - **Links block orientations** (`from_orientation`, `to_orientation`): `n = record_num` from the block header
 - **Walks type orientations** (`walks_orientations`): `n = uncompressed_walk_len` from the containing block header
-- **Walks/Paths block strategy codes** (orientation + strid/numid): `n` equals the total number of segment occurrences across all walks/paths
 - **Huffman encoded data**: `n` is determined by decoding exactly the required number of symbols (e.g., `2 * L` nibbles for a string of length `L`)
 
 **Size calculation:** Number of uint64 words = `ceil(n / 64)`. Total bytes for bits field = `8 * ceil(n / 64)`.

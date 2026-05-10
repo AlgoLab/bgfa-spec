@@ -152,8 +152,8 @@ length is 20 bytes.
 
 | Field                 | Description                                       | Type                         |
 | --------------------- | ------------------------------------------------- | ---------------------------- |
-| `from_ids`            | Tail segment IDs (1-based; 0 = no connection)     | `uints-delta`                |
-| `to_ids`              | Head segment IDs (1-based; 0 = no connection)     | `uints-delta`                |
+| `from_ids`            | Tail segment IDs (1-based; 0 = no connection)     | `uints`                      |
+| `to_ids`              | Head segment IDs (1-based; 0 = no connection)     | `uints`                      |
 | `from_orientation`    | Orientations of all from segments. 0 is +, 1 is - | `bits` (length = record_num) |
 | `to_orientation`      | Orientations of all to segments. 0 is +, 1 is -   | `bits` (length = record_num) |
 | `links_cigar_strings` | CIGAR strings                                     | `cigar strings`              |

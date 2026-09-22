@@ -131,17 +131,17 @@ Each block consists of a header and a payload.
 
 The following is the sequence of fields making up the header.
 
-| Field                           | Description                                            | Type       |
-| ------------------------------- | ------------------------------------------------------ | ---------- |
-| `section_id`                    | Section type (3 = links)                               | `uint8`    |
-| `record_num`                    | number of records in the block                         | `uint16`   |
-| **From/To field**               |                                                        |            |
-| `compression_fromto`            | Encoding strategy for the from/to fields               | `bytes[2]` |
-| `compressed_fromto_len`         | length of compressed from/to payload (metadata + blob) | `uint64`   |
-| **CIGAR field**                 |                                                        |            |
-| `compression_links_cigars`      | Encoding strategy for the cigar strings (4 bytes)      | `bytes[4]` |
-| `compressed_links_cigars_len`   | length of compressed cigars payload (metadata + blob)  | `uint64`   |
-| `uncompressed_links_cigars_len` | sum of the lengths of uncompressed cigars              | `uint64`   |
+| Field                           | Description                                           | Type       |
+| ------------------------------- | ----------------------------------------------------- | ---------- |
+| `section_id`                    | Section type (3 = links)                              | `uint8`    |
+| `record_num`                    | number of records in the block                        | `uint16`   |
+| **From/To field**               |                                                       |            |
+| `compression_fromto`            | Encoding strategy for the from/to fields              | `byte`     |
+| `compressed_fromto_len`         | length of compressed from/to payload                  | `uint64`   |
+| **CIGAR field**                 |                                                       |            |
+| `compression_links_cigars`      | Encoding strategy for the cigar strings (4 bytes)     | `bytes[4]` |
+| `compressed_links_cigars_len`   | length of compressed cigars payload (metadata + blob) | `uint64`   |
+| `uncompressed_links_cigars_len` | sum of the lengths of uncompressed cigars             | `uint64`   |
 
 ### Payload
 
@@ -160,7 +160,9 @@ length is 20 bytes.
 
 **Segment ID encoding:** Segment IDs in the links payload are stored as 1-based indices into the segment list (value = internal_segment_id + 1, where internal IDs start at 0). The value 0 is reserved to indicate "no connection". The reader converts back to 0-based by subtracting 1.
 
-**Orientation mapping:** The i-th bit in `from_orientation` corresponds to the i-th segment ID in `from_ids`. Similarly, the i-th bit in `to_orientation` corresponds to the i-th segment ID in `to_ids`.
+**Orientation mapping:** The i-th bit in `from_orientation` corresponds to the i-th segment ID in `from_ids`.
+Similarly, the i-th bit in `to_orientation` corresponds to the i-th segment ID in `to_ids`.
+There are first `record_num` integers for the `from_ids`, then `record_num` integers for the `to_ids`
 Therefore there are exactly `record_num` segment IDs in both the `from_ids` and in the `to_ids` lists and there are exactly
 `record_num` bits in both the `from_orientation` and in the `to_orientations` lists.
 
@@ -181,7 +183,7 @@ The following is the sequence of fields making up the header.
 | `compression_path_names`       | Encoding strategy for the path names (2 bytes)                   | `bytes[2]` |
 | `compressed_path_names_len`    | length of compressed path names                                  | `uint64`   |
 | `uncompressed_path_names_len`  | length of uncompressedpath names                                 | `uint64`   |
-| `compression_paths`            | Encoding strategy for the paths as list of segment IDs (4 bytes) | `bytes[2]` |
+| `compression_paths`            | Encoding strategy for the paths as list of segment IDs           | `bytes[2]` |
 | `compressed_paths_len`         | length of compressed paths                                       | `uint64`   |
 | `uncompressed_paths_len`       | sum of the lengths of uncompressed paths (as segment ID strings) | `uint64`   |
 | `compression_paths_cigars`     | Encoding strategy for the cigar strings (4 bytes)                | `bytes[4]` |
@@ -216,7 +218,7 @@ The following is the sequence of fields making up the header.
 | `compression_sequence`        | Encoding strategy for the sequence IDs                               | `byte`     |
 | `compression_positions_start` | Encoding strategy for the start positions                            | `byte`     |
 | `compression_positions_end`   | Encoding strategy for the end positions                              | `byte`     |
-| `compression_walks`           | Encoding strategy for the walks (4 bytes)                            | `bytes[2]` |
+| `compression_walks`           | Encoding strategy for the walks                                      | `bytes[2]` |
 | **Samples field**             |                                                                      |            |
 | `compressed_sample_ids_len`   | length of compressed sample IDs payload (metadata + blob)            | `uint64`   |
 | `uncompressed_sample_ids_len` | sum of the lengths of uncompressed sample IDs                        | `uint64`   |
@@ -312,7 +314,7 @@ Bytes: [HH, LL]
 **2-byte Strategy Codes (Walks/Paths):**
 
 ```
-Format: 0xDD00IISS
+Format: 0xHHLL
 Bytes: [HH, LL]
 ```
 

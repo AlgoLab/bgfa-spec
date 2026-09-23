@@ -152,13 +152,11 @@ length is 20 bytes.
 
 | Field                 | Description                                       | Type                         |
 | --------------------- | ------------------------------------------------- | ---------------------------- |
-| `from_ids`            | Tail segment IDs (1-based; 0 = no connection)     | `uints`                      |
-| `to_ids`              | Head segment IDs (1-based; 0 = no connection)     | `uints`                      |
+| `from_ids`            | Tail internal segment IDs                         | `uints`                      |
+| `to_ids`              | Head internal segment IDs                         | `uints`                      |
 | `from_orientation`    | Orientations of all from segments. 0 is +, 1 is - | `bits` (length = record_num) |
 | `to_orientation`      | Orientations of all to segments. 0 is +, 1 is -   | `bits` (length = record_num) |
 | `links_cigar_strings` | CIGAR strings                                     | `cigar strings`              |
-
-**Segment ID encoding:** Segment IDs in the links payload are stored as 1-based indices into the segment list (value = internal_segment_id + 1, where internal IDs start at 0). The value 0 is reserved to indicate "no connection". The reader converts back to 0-based by subtracting 1.
 
 **Orientation mapping:** The i-th bit in `from_orientation` corresponds to the i-th segment ID in `from_ids`.
 Similarly, the i-th bit in `to_orientation` corresponds to the i-th segment ID in `to_ids`.

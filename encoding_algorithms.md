@@ -152,14 +152,17 @@ is the number of integers implied by the containing block header, and it is plac
 [Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)). The absolute values follow as one
 integer list encoded with the field's integer strategy.
 
-**Layout of a `uints-delta` field.** In byte order, a `uints-delta` field is exactly:
+**Layout of a `uints-delta` field.** Conceptually, a `uints-delta` field is, per field:
 
 ```
 [method preamble, if any][absolute value 0] ... [absolute value n-1][sign bits]
 ```
 
-The sign `bits` field comes last, in the trailing `bits`-fields group of the owning `compressed_*_len`
-field, per rule 3. The "method preamble" is present only for
+In byte order this is not contiguous: the absolute values sit inline at the field's position, while the
+sign `bits` field is deferred to the trailing `bits`-fields group of the owning `compressed_*_len` field,
+per rule 3. When a region holds several `uints-delta` fields (the Walks `start_positions` and
+`end_positions`), the byte order is: each field's preamble and absolute values in block field order, then
+the whole trailing `bits`-fields group in block field order. The "method preamble" is present only for
 [Rice (`0x07`)](#rice-0x07), whose one-byte `k` parameter therefore precedes the first absolute value.
 There is no preamble for any other method.
 
@@ -167,12 +170,19 @@ Note that there is **one delta stream per field** and it is never restarted part
 definition in [Type Definitions](gfa_binary_format.md#type-definitions).
 
 **Validation.** A reader MUST reject the field as a fatal error if the sign `bits` field does not decode to
-exactly one sign bit per integer, or if the absolute values do not terminate exactly at the start of the
-trailing sign `bits` field — that is, at `compressed_*_len` minus `8 * ceil(n / 64)` bytes. Any bytes
-between the last absolute value and the sign `bits` field are a fatal error, so a non-canonical encoding
-that pads the absolute list is rejected. Negative absolute values are impossible by construction, but a
-decoder MUST still reject an absolute value that cannot be represented in the width implied by the field's
-integer strategy, rather than silently wrapping it.
+exactly one sign bit per integer, or if the owning region's inline absolute values — the absolute values of
+**all** the owning region's `uints-delta` fields, decoded together in block field order — do not terminate exactly
+at the start of the owning region's trailing `bits`-fields group, that is, at `compressed_*_len` minus the total
+byte size of **all** `bits` fields in that group, each `8 * ceil(n_i / 64)` bytes for its own `n_i` (rule 3
+of the size rules in [Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)). A decoder locates
+the group from the end of the region and requires the combined inline integer stream to end at the group's
+first byte; the group may hold more `bits` fields after this field's sign bits (for example,
+`end_positions` signs or `walks_orientations`). In a region with several `uints-delta` fields, each field's
+absolute values end where the next field's absolute values begin, and only the last field's absolute values
+are adjacent to the group. Any bytes between the last absolute value and the group are a fatal error, so a
+non-canonical encoding that pads the absolute list is rejected. Negative absolute values are impossible by
+construction, but a decoder MUST still reject an absolute value that cannot be represented in the width
+implied by the field's integer strategy, rather than silently wrapping it.
 
 **Reconstruction.** The decoded values are the running sum of the signed deltas. The first value is the
 first delta itself; every later value is the previous value plus its delta. A reader MUST reject the
@@ -384,6 +394,14 @@ are therefore attacker-controlled.
 - Arithmetic on sizes derived from the header (products, sums, `ceil(n / 4)`, `8 * ceil(n / 64)`,
   `16 * ceil(n / 64)`, dictionary `N + 1`) MUST be performed with overflow checking, and a reader MUST
   reject the field rather than wrap around.
+- For a `walks`-type field, the decoded `walks_lengths` list MUST contain exactly `record_num` integers,
+  each L(i) MUST be at least 1, and the sum of all L(i) MUST equal `uncompressed_walk_len` in a Walks block
+  and `uncompressed_paths_len` in a Paths block. A reader MUST reject the block as a fatal error on any
+  violation: these counts come from the header and are attacker-controlled, and a mismatch would silently
+  mis-assign segment occurrences to walks. The `at least 1` bound is a source-format constraint, not an
+  encoding artifact: the GFA 1.1 W-line grammar defines a walk as one or more oriented segments
+  (`(<orientation> <segId>)+`), so an empty walk cannot be represented, and `uncompressed_walk_len` is
+  therefore always at least `record_num`.
 
 ## String Encoding Algorithms
 

@@ -4,10 +4,15 @@ These tests pin the review-fix outcomes: they fail if a stale claim
 reappears or if a hand-verifiable arithmetic example drifts. They are
 change-detectors for the spec prose, not behavior tests: in a
 specification repository the prose is the artifact under test.
+
+All guards are bare ``assert`` statements, so ``python -O`` silently
+disables this suite; run it without optimization.
 """
 
 import re
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parent
 ENCODING = (ROOT / "encoding_algorithms.md").read_text()
@@ -16,6 +21,15 @@ BINARY = (ROOT / "gfa_binary_format.md").read_text()
 # markdown line wrapping.
 NORM_ENCODING = " ".join(ENCODING.split())
 NORM_BINARY = " ".join(BINARY.split())
+
+
+def section(text, start, end):
+    """Return the text between two anchors, failing clearly if either is missing."""
+    assert start in text, f"missing section anchor: {start!r}"
+    assert end in text, f"missing section anchor: {end!r}"
+    rest = text.split(start, 1)[1]
+    assert end in rest, f"section end anchor {end!r} does not follow start anchor {start!r}"
+    return rest.split(end, 1)[0]
 
 
 def test_dictionary_max_size_is_65535():
@@ -54,7 +68,7 @@ def test_cigar_none_ss_is_reserved_not_ignored():
 
 
 def test_rule2_self_delimiting_list_excludes_none():
-    rule2 = BINARY.split("**Self-delimiting integer fields.**")[1].split("3. **`bits`")[0]
+    rule2 = section(BINARY, "**Self-delimiting integer fields.**", "3. **`bits`")
     rule2_norm = " ".join(rule2.split())
     method_list = rule2_norm.split("encoded with", 1)[1].split("MUST be decoded", 1)[0]
     assert "`none`" not in method_list
@@ -65,7 +79,7 @@ def test_rule2_self_delimiting_list_excludes_none():
 
 
 def test_rule1_positions_count_is_per_subfield():
-    rule1 = BINARY.split("**Fixed-size integer fields.**")[1].split("2. **Self-delimiting")[0]
+    rule1 = section(BINARY, "**Fixed-size integer fields.**", "2. **Self-delimiting")
     rule1_norm = " ".join(rule1.split())
     assert "`2 * record_num`" not in rule1_norm
     assert "`record_num` for **each** of the Walks `start_positions` and `end_positions`" in rule1_norm
@@ -75,14 +89,14 @@ def test_rule1_positions_count_is_per_subfield():
 
 
 def test_sign_bits_are_packed_bits_fields():
-    rule1 = BINARY.split("**Fixed-size integer fields.**")[1].split("2. **Self-delimiting")[0]
+    rule1 = section(BINARY, "**Fixed-size integer fields.**", "2. **Self-delimiting")
     rule1_norm = " ".join(rule1.split())
     assert "the sign bits are a separate `bits` field covered by rule 3" in rule1_norm
     assert "run-length-encoded bitstream" not in rule1_norm
     assert "not a packed `bits` field" not in rule1_norm
     assert "Run-Length Bits" not in NORM_ENCODING
     assert "This is the encoding used for the sign bits" not in NORM_ENCODING
-    packed = NORM_BINARY.split("**Determining the number of bits (n):**")[1].split("**Size calculation:**")[0]
+    packed = section(NORM_BINARY, "**Determining the number of bits (n):**", "**Size calculation:**")
     assert "`uints-delta` sign bits" in packed
 
 
@@ -97,7 +111,7 @@ def test_worked_examples_use_packed_sign_bits():
 
 
 def test_rule3_bits_fields_come_last():
-    rule3 = BINARY.split("**`bits` fields.**")[1].split("4. **Blobs.**")[0]
+    rule3 = section(BINARY, "**`bits` fields.**", "4. **Blobs.**")
     rule3_norm = " ".join(rule3.split())
     assert "always the **last** part" not in rule3_norm
     assert "never followed by a non-`bits` field" in rule3_norm
@@ -117,7 +131,7 @@ def test_walks_type_format_covers_paths():
 
 
 def test_walks_block_layout_maps_payload_to_owner():
-    layout = NORM_BINARY.split("**Layout:** each payload field occupies")[1].split("See [Payload Byte Layouts]")[0]
+    layout = section(NORM_BINARY, "**Layout:** each payload field occupies", "See [Payload Byte Layouts]")
     assert "`sequence_ids` → `compressed_sequence_len`" in layout
     assert "`haplotype_indices` → `compressed_haplotype_len`" in layout
     assert "`start_positions` then `end_positions` → `compressed_positions_len`" in layout
@@ -131,11 +145,12 @@ def test_end_positions_decision_recorded_as_kept():
 
 
 def test_rule3_bits_fields_are_ordered_by_block_field_order():
-    rule3 = BINARY.split("**`bits` fields.**")[1].split("4. **Blobs.**")[0]
+    rule3 = section(BINARY, "**`bits` fields.**", "4. **Blobs.**")
     rule3_norm = " ".join(rule3.split())
     assert "in **block field order**" in rule3_norm
     assert "rank at that field's own position" in rule3_norm
     assert '"first" means first in that order' in rule3_norm
+    assert "the order in that type's layout section" in rule3_norm
 
 
 def test_walks_byte_order_places_sign_bits_before_orientations():
@@ -146,8 +161,11 @@ def test_walks_byte_order_places_sign_bits_before_orientations():
 
 
 def test_uints_delta_validation_requires_exact_termination():
-    assert "do not terminate exactly at the start of the trailing sign `bits` field" in NORM_ENCODING
-    assert "minus `8 * ceil(n / 64)` bytes" in NORM_ENCODING
+    assert "the owning region's inline absolute values" in NORM_ENCODING
+    assert "the absolute values of **all** the owning region's `uints-delta` fields" in NORM_ENCODING
+    assert "each field's absolute values end where the next field's absolute values begin" in NORM_ENCODING
+    assert "minus the total byte size of **all** `bits` fields in that group" in NORM_ENCODING
+    assert "do not terminate exactly at the start of the owning region's trailing `bits`-fields group" in NORM_ENCODING
     assert "run past the end of the owning" not in NORM_ENCODING
 
 
@@ -156,16 +174,23 @@ def test_payload_tables_note_uints_delta_is_split():
     assert "deferred to the trailing `bits`-fields group" in NORM_BINARY
 
 
-def test_worked_example_hex_dump_is_consistent():
+def _dump_bytes():
+    """Parse the appendix's full hex dump into bytes (fixed-column slicing)."""
     dump = BINARY.split("Full hex dump of the file:")[1].split("```")[1]
     data = bytearray()
     for line in dump.splitlines():
         if not line.strip():
             continue
-        # Fixed columns: 4-char offset, then 16 hex bytes at 3 chars each.
-        # Slicing by column keeps the ASCII column (which may contain a space
-        # byte) out of the parse, and tolerates a short final line.
-        data.extend(int(b, 16) for b in line[4:52].split())
+        # Fixed columns: 4-char offset, 2-space separator, then 16 hex bytes
+        # at 3 chars each. Slicing by column keeps the ASCII column (which may
+        # contain a space byte) out of the parse, and tolerates a short final
+        # line.
+        data.extend(int(b, 16) for b in line[6:54].split())
+    return data
+
+
+def test_worked_example_hex_dump_is_consistent():
+    data = _dump_bytes()
     assert len(data) == 395
     assert data[:4] == b"BGFA"
     # The three region length fields that grew with packed sign bits:
@@ -177,6 +202,47 @@ def test_worked_example_hex_dump_is_consistent():
     assert data[316:324] == twenty
 
 
+def test_payload_table_rows_match_hex_dump():
+    # Every payload-table row in the appendix must agree with the hex dump,
+    # giving the tables an independent ground truth: the arithmetic model
+    # test only cross-checks tables against each other.
+    data = _dump_bytes()
+    for a, b in [("### A.2 Segments block", "### A.3 Links block"),
+                 ("### A.3 Links block", "### A.4 Paths block"),
+                 ("### A.4 Paths block", "### A.5 Walks block"),
+                 ("### A.5 Walks block", "### A.6 Round-trip")]:
+        for row in _table_rows(section(BINARY, a, b), "Payload ("):
+            parsed = _parse_payload_row(row)
+            if parsed is None:
+                continue
+            offset, expected = parsed
+            assert data[offset:offset + len(expected)] == expected, (
+                f"payload row {row!r} does not match the hex dump"
+            )
+
+
+def test_parse_payload_row_rejects_malformed_rows():
+    # Synthetic rows lock in the guard raises: a typo in the appendix must
+    # fail loudly, never pass silently.
+    with pytest.raises(AssertionError, match="expected 3 cells"):
+        _parse_payload_row(["56", "`00 03`"])
+    with pytest.raises(AssertionError, match="not a decimal offset"):
+        _parse_payload_row(["1,024", "`00 03`", "meaning"])
+    with pytest.raises(AssertionError, match="byte cell '' is empty"):
+        _parse_payload_row(["56", "", "meaning"])
+    with pytest.raises(AssertionError, match="byte cell '``' is empty"):
+        _parse_payload_row(["56", "``", "meaning"])
+    with pytest.raises(AssertionError, match="not a hex byte"):
+        _parse_payload_row(["56", "`00 …`", "meaning"])
+    # Header and separator rows of any width are skipped, not validated.
+    assert _parse_payload_row(["Offset", "Bytes", "Meaning"]) is None
+    assert _parse_payload_row(["OFFSET", "Bytes", "Meaning"]) is None
+    assert _parse_payload_row(["------", "-----", "-----"]) is None
+    assert _parse_payload_row(["-", "-", "-"]) is None
+    # A well-formed row parses to (offset, bytes).
+    assert _parse_payload_row(["56", "`00 03 06`", "meaning"]) == (56, b"\x00\x03\x06")
+
+
 def test_signed_integers_terminology_and_prose_order():
     assert "sign bitstream" not in NORM_ENCODING
     assert "The i-th bit in the sign `bits` field corresponds to the sign" in NORM_ENCODING
@@ -184,4 +250,153 @@ def test_signed_integers_terminology_and_prose_order():
         "so the absolute values are [0, 1, 0, 1, 1], encoded per the integer strategy in the second byte "
         "of `compression_walks`, followed by the sign bits [0, 0, 0, 0, 0] packed into a trailing `bits` "
         "field" in NORM_BINARY
+    )
+
+
+def test_walks_sequence_ids_is_single_byte_uints():
+    a5 = section(BINARY, "### A.5 Walks block", "### A.6 Round-trip")
+    rows = _table_rows(a5, "Header (")
+    seq = next(r for r in rows if r[0].strip("`") == "compression_sequence")
+    assert len(seq[1].strip("`").split()) == 1
+    assert "| `sequence_ids` | Walk sequence IDs | `uints` | `compressed_sequence_len` |" in NORM_BINARY
+
+
+def test_uints_delta_code_width_is_single_byte():
+    assert "A standalone `uints-delta` field" in NORM_BINARY
+    assert "carries a **single** integer byte" in NORM_BINARY
+    assert "`walks`/`uints-delta` fields (first byte integer, second byte integer)" not in NORM_BINARY
+    assert "| `compression_positions_start` | `01` | varint for the start positions |" in NORM_BINARY
+    assert "| `compression_positions_end` | `01` | varint for the end positions |" in NORM_BINARY
+
+
+def test_compression_sequence_definition_type_is_byte():
+    assert "| `compression_sequence` | Integer encoding strategy for the walk sequence IDs | `byte` |" in NORM_BINARY
+    assert "| `compression_sequence` | Integer encoding strategy for the walk sequence IDs | `bytes[2]` |" not in NORM_BINARY
+
+
+def test_no_residual_contiguity_claims():
+    assert "the sign `bits` field is deferred to the owning region's trailing `bits`-fields group" in NORM_BINARY
+    assert "Conceptually, a `uints-delta` field is" in NORM_ENCODING
+    assert "In byte order this is not contiguous" in NORM_ENCODING
+    assert "the payload is the absolute values of the deltas followed by the sign `bits` field" not in NORM_BINARY
+    assert "the following 8 bytes hold the two sign bits" not in NORM_BINARY
+    assert "the start-position magnitudes [1, 0] at 355" in NORM_BINARY
+    assert "the end-position magnitudes [0, 0] at 357" in NORM_BINARY
+
+
+def test_walks_lengths_sum_is_validated():
+    assert "each L(i) MUST be at least 1" in NORM_ENCODING
+    assert "the sum of all L(i) MUST equal `uncompressed_walk_len`" in NORM_ENCODING
+    assert "A reader MUST validate the count, the sum, and that every L(i) is at least 1" in NORM_BINARY
+    assert "a walk as one or more oriented segments" in NORM_ENCODING
+    assert "a walk as one or more oriented segments" in NORM_BINARY
+    assert "an empty walk cannot be represented" in NORM_ENCODING
+    assert "an empty walk cannot be represented" in NORM_BINARY
+
+
+def test_implementation_defined_caps_acknowledged():
+    assert "divergence at the boundary is explicitly permitted" in NORM_BINARY
+
+
+def _bits_bytes(n):
+    return 8 * ((n + 63) // 64)
+
+
+def _table_rows(text, heading):
+    """Parse the markdown table that follows a heading line."""
+    rows = []
+    for line in text.split(heading, 1)[1].splitlines():
+        if line.lstrip().startswith("|"):
+            rows.append([c.strip() for c in line.strip().strip("|").split("|")])
+        elif rows:
+            break
+    return rows
+
+
+def _parse_payload_row(row):
+    """Parse one payload-table row into (offset, bytes), or None for a
+    header/separator row. Guards fail loudly on malformed rows so a typo in
+    the appendix cannot pass silently: the row is the artifact under test."""
+    assert len(row) == 3, f"payload row {row!r}: expected 3 cells, found {len(row)}"
+    offset_cell, bytes_cell, meaning = row
+    if re.fullmatch(r"Offset", offset_cell, re.I) or re.fullmatch(r"[-:]+", offset_cell):
+        return None
+    assert offset_cell.isdigit(), (
+        f"payload row {row!r}: offset cell {offset_cell!r} is not a decimal offset"
+    )
+    tokens = bytes_cell.strip("`").split()
+    assert tokens, f"payload row {row!r}: byte cell {bytes_cell!r} is empty"
+    for token in tokens:
+        assert re.fullmatch(r"[0-9a-fA-F]{2}", token), (
+            f"payload row at offset {offset_cell} ({meaning}): byte cell {token!r} is not a hex byte"
+        )
+    return int(offset_cell), bytes(int(token, 16) for token in tokens)
+
+
+def _header_value(text, field):
+    for row in _table_rows(text, "Header ("):
+        if row[0].strip("`") == field:
+            return int(row[2])
+    raise AssertionError(f"header field {field!r} not found")
+
+
+def _payload_offset(text, meaning_substring):
+    matches = [row for row in _table_rows(text, "Payload (")
+               if meaning_substring in row[2].replace("`", "")]
+    assert len(matches) == 1, (
+        f"payload rows matching {meaning_substring!r}: expected exactly 1, found {len(matches)}"
+    )
+    return int(matches[0][0])
+
+
+def test_appendix_arithmetic_model():
+    a4 = section(BINARY, "### A.4 Paths block", "### A.5 Walks block")
+    a5 = section(BINARY, "### A.5 Walks block", "### A.6 Round-trip")
+
+    # Each region: (section, first field, compressed length header field,
+    # bits fields in block field order as (meaning substring, n header field)).
+    regions = [
+        (a4, "walks_lengths", "compressed_paths_len",
+         [("walks_segments sign bits", "uncompressed_paths_len"),
+          ("walks_orientations", "uncompressed_paths_len")]),
+        (a5, "start_positions absolute deltas", "compressed_positions_len",
+         [("start_positions sign bits", "record_num"),
+          ("end_positions sign bits", "record_num")]),
+        (a5, "walks_lengths", "compressed_walk_len",
+         [("walks_segments sign bits", "uncompressed_walk_len"),
+          ("walks_orientations", "uncompressed_walk_len")]),
+    ]
+    for text, first_field, len_field, bits_fields in regions:
+        start = _payload_offset(text, first_field)
+        end = start + _header_value(text, len_field)
+        sizes = [_bits_bytes(_header_value(text, n_field)) for _, n_field in bits_fields]
+        running = end - sum(sizes)
+        for (meaning, _), size in zip(bits_fields, sizes):
+            assert _payload_offset(text, meaning) == running, (
+                f"{meaning}: model says offset {running}, table says "
+                f"{_payload_offset(text, meaning)}"
+            )
+            running += size
+        assert _payload_offset(text, bits_fields[-1][0]) + sizes[-1] == end
+
+    # A.5 header arithmetic: 1 (section_id) + 2 (record_num) + strategy code
+    # bytes + 10 * 8 length bytes = 91.
+    code_rows = [r for r in _table_rows(a5, "Header (") if r[0].startswith("`compression_")]
+    code_bytes = sum(len(r[1].strip("`").split()) for r in code_rows)
+    assert 1 + 2 + code_bytes + 10 * 8 == 91
+    assert "11 + 80 = 91" in NORM_BINARY
+
+    # Region boundaries and total size, as stated in the appendix headings.
+    assert "A.4 Paths block (86 bytes, offsets 155-240)" in NORM_BINARY
+    assert "A.5 Walks block (154 bytes, offsets 241-394)" in NORM_BINARY
+    assert "395 bytes (17 + 82 + 56 + 86 + 154)" in NORM_BINARY
+
+    # The appendix's own size decompositions agree with the model.
+    assert (
+        "20 = 1 byte of `walks_lengths` + 3 bytes of absolute deltas + 8 bytes of sign bits + 8 bytes "
+        "of the `uint64` word of `walks_orientations`" in NORM_BINARY
+    )
+    assert (
+        "20 = 2 bytes of `walks_lengths` + 2 bytes of absolute deltas + 8 bytes of sign bits + 8 bytes "
+        "of the `uint64` word of `walks_orientations`" in NORM_BINARY
     )

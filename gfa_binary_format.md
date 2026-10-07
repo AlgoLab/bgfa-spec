@@ -103,7 +103,7 @@ To read a block from a BGFA file, a reader follows these steps:
 1. **Read the block header**: Parse the `section_id` (1 byte) to determine the block type, then parse the remaining header fields according to the block type's header layout.
 2. **Determine payload size**: The total payload size is the sum of all `compressed_*_len` fields in the header. Each `compressed_*_len` covers the whole encoded payload of its field, including any integer metadata list and blob.
 3. **Parse each payload field**: For each field, use the strategy code to determine how to decode it. The strategy
-   codes are different, depending on the type of data we want to store. For `strings` fields, read the metadata (integer positions list encoded per the first-byte strategy), then read the compressed blob (encoded per the second-byte strategy). For `uints` fields, the entire payload is the integer list encoded per the strategy code. For `uints-delta` fields, the payload is the absolute values of the deltas followed by the sign `bits` field (see [Signed Integers](encoding_algorithms.md#signed-integers)). For `bits` fields, read raw bits using the known bit count (see [Packed Bits](#packed-bits)).
+   codes are different, depending on the type of data we want to store. For `strings` fields, read the metadata (integer positions list encoded per the first-byte strategy), then read the compressed blob (encoded per the second-byte strategy). For `uints` fields, the entire payload is the integer list encoded per the strategy code. For `uints-delta` fields, the payload is the absolute values of the deltas; the sign `bits` field is deferred to the owning region's trailing `bits`-fields group (rule 3, see [Signed Integers](encoding_algorithms.md#signed-integers)). For `bits` fields, read raw bits using the known bit count (see [Packed Bits](#packed-bits)).
 4. **Reconstruct data**: Use the metadata and strategy codes to decode each field back to its original form.
 
 For implementation details of each encoding method, see [encoding_algorithms.md](encoding_algorithms.md).
@@ -172,9 +172,11 @@ once, at the position of its absolute values.
    bits (see [Packed Bits](#packed-bits)). A `bits` field is never followed by a non-`bits` field: the
    `bits` fields come at the end of their owning `compressed_*_len` field. When an owning field contains
    more than one `bits` field, they appear in the trailing group in **block field order** — the order in
-   which the fields are listed for that block — and a `uints-delta` field's sign bits rank at that field's
-   own position in that order. The start offset of the first `bits` field is `compressed_*_len` minus the
-   total byte size of all `bits` fields it owns (e.g. `16 * ceil(record_num / 64)` for the Links block's
+   which the fields are listed for that block, and for a field whose type expands into sub-fields (the
+   `walks` type) the order in that type's layout section (see [Walks Type Format](#walks-type-format)) —
+   and a `uints-delta` field's sign bits rank at that field's own position in that order. The start
+   offset of the first `bits` field is `compressed_*_len` minus the total byte size of all `bits` fields
+   it owns (e.g. `16 * ceil(record_num / 64)` for the Links block's
    `from_orientation` and `to_orientation`); "first" means first in that order.
 4. **Blobs.** A `strings` field is `metadata` + `blob`, and the blob carries a leading `varint` blob length, so
    the blob is self-delimiting (see [Blob Framing](encoding_algorithms.md#blob-framing)). The blob length is
@@ -208,7 +210,9 @@ A reader MUST perform the following checks, **in this order and before allocatin
    bounded by an implementation-defined limit. A block whose decoded content would exceed that limit MUST be
    rejected as a fatal error, rather than causing the reader to attempt the allocation. This bound also applies
    to any state a reader retains across blocks, such as the segment ID table needed to resolve segment IDs to
-   names: see [Segments Block](#segments-block).
+   names: see [Segments Block](#segments-block). The limit is implementation-defined, so two conformant
+   readers may disagree on a given file; a reader SHOULD document its limit, and divergence at the boundary
+   is explicitly permitted.
 5. **Value widths.** A value that does not fit the width implied by its integer strategy MUST be rejected, not
    truncated: see [Integer Validation Rules](encoding_algorithms.md#integer-validation-rules).
 6. **Arithmetic overflow.** Products, sums and roundings derived from header fields — `n * 2`, `n * 4`,
@@ -414,7 +418,7 @@ The following is the sequence of fields making up the header.
 | **Compression strategies**    |                                                                      |            |
 | `compression_sample_ids`      | Encoding strategy for the sample IDs (2 bytes)                       | `bytes[2]` |
 | `compression_haplotype`       | Integer encoding strategy for the haplotype indices                  | `byte`     |
-| `compression_sequence`        | Integer encoding strategy for the walk sequence IDs                  | `bytes[2]` |
+| `compression_sequence`        | Integer encoding strategy for the walk sequence IDs                  | `byte`     |
 | `compression_positions_start` | Integer encoding strategy for the start positions                    | `byte`     |
 | `compression_positions_end`   | Integer encoding strategy for the end positions                      | `byte`     |
 | `compression_walks`           | Encoding strategy for the walks                                      | `bytes[2]` |
@@ -442,7 +446,7 @@ The following is the sequence of fields making up the payload layout.
 | ------------------- | ------------------------------------------------------ | ------------- | -------------------------------- |
 | `sample_ids`        | Sample IDs                                             | `strings`     | `compressed_sample_ids_len`      |
 | `haplotype_indices` | Haplotype indices                                      | `uints`       | `compressed_haplotype_len`       |
-| `sequence_ids`      | Walk sequence IDs                                      | `string`      | `compressed_sequence_len`        |
+| `sequence_ids`      | Walk sequence IDs                                      | `uints`       | `compressed_sequence_len`        |
 | `start_positions`   | Start positions                                        | `uints-delta` | `compressed_positions_len` (1st) |
 | `end_positions`     | End positions                                          | `uints-delta` | `compressed_positions_len` (2nd) |
 | `walks`             | Walks, each walk is a sequence of oriented segment IDs | `walks`       | `compressed_walk_len`            |
@@ -719,7 +723,8 @@ CIGAR_STRING_CODES = {0x00, 0x01, 0x02, 0x03, 0x04, 0xF4}
 
 
 # Valid 2-byte strategy code. The second byte's set depends on the field type:
-# STRING_CODES for `strings`, INTEGER_CODES for `walks` and `uints-delta`.
+# STRING_CODES for `strings`, INTEGER_CODES for the `walks` type. A standalone
+# `uints-delta` field (the positions sub-fields) uses a single integer byte.
 def is_valid_strings_strategy(code_bytes):
     if len(code_bytes) != 2:
         return False
@@ -754,11 +759,14 @@ def is_valid_4byte_cigar_strategy(code_bytes):
             and ss in CIGAR_STRING_CODES)
 ```
 
-Note that a 2-byte code is used for `strings` (first byte integer, second byte string) **and** for
-`walks`/`uints-delta` fields (first byte integer, second byte integer). The second byte therefore must be
-validated against `STRING_CODES` in the first case and against `INTEGER_CODES` in the second, which is
-determined by the field type, not by the code alone. Note also that `SS` in a 4-byte CIGAR code is validated
-against `CIGAR_STRING_CODES`, not `STRING_CODES`: see
+Note that a 2-byte code is used for `strings` (first byte integer, second byte string) and for the `walks`
+type (first byte integer for `walks_lengths`, second byte integer for the `walks_segments` absolute
+values). A standalone `uints-delta` field — the Walks `start_positions` and `end_positions` sub-fields —
+carries a **single** integer byte for its absolute values; its sign bits are a `bits` field, not a second
+strategy byte. The second byte of a 2-byte code must therefore be validated against `STRING_CODES` for
+`strings` and against `INTEGER_CODES` for the `walks` type, which is determined by the field type, not by
+the code alone. Note also that `SS` in a 4-byte CIGAR code is validated against `CIGAR_STRING_CODES`, not
+`STRING_CODES`: see
 [CIGAR 4-byte Strategy Code Details](encoding_algorithms.md#cigar-4-byte-strategy-code-details).
 
 ## Walks Type Format
@@ -775,7 +783,7 @@ The `walks` layout is made by the following sequence of fields.
 
 - All lengths of the walks are followed by all segment IDs of the walks (their absolute deltas, then their
   trailing sign `bits` field), followed by all walks orientations.
-- The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` in a Walks block and `uncompressed_paths_len` in a Paths block.
+- The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` in a Walks block and `uncompressed_paths_len` in a Paths block. A reader MUST validate the count, the sum, and that every L(i) is at least 1: see [Integer Validation Rules](encoding_algorithms.md#integer-validation-rules). The `at least 1` bound is a source-format constraint, not an encoding artifact: the GFA 1.1 W-line grammar defines a walk as one or more oriented segments (`(<orientation> <segId>)+`), so an empty walk cannot be represented, and `uncompressed_walk_len` is therefore always at least `record_num`.
 - The `walks_segments` field contains a sequence of `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) integers. The first L(1) integers form the sequence of segment IDs of the first walk, then the subsequent L(2) integers form the sequence of the segment IDs of the second walk, etc.
 - The `walks_orientations` field contains a sequence of `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) bits. The first L(1) bits form the sequence of segment orientations of the first walk, then the subsequent L(2) bits form the sequence of the segment orientations of the second walk. Orientation `+` or `>` is encoded as `0`, while `-` or `<` is encoded as 1.
 
@@ -1098,10 +1106,10 @@ Payload (63 bytes), starting at offset 332:
 
 19 = 4 bytes of positions (2 starts, 2 ends) + 1 byte of blob length + 14 bytes of superstring.
 20 = 2 bytes of start-position absolute values + 2 bytes of end-position absolute values + 8 bytes of
-start-position sign bits + 8 bytes of end-position sign bits. Each `uints-delta` field is its absolute
-values followed by its sign `bits` field, so `01 00` are the start-position magnitudes [1, 0] and the
-following 8 bytes hold the two sign bits (both 0); the end positions follow the same shape with
-magnitude `0`.
+start-position sign bits + 8 bytes of end-position sign bits. The absolute values are inline in block field
+order — the start-position magnitudes [1, 0] at 355, the end-position magnitudes [0, 0] at 357 — while the
+two sign-bit fields are deferred to the trailing `bits`-fields group per rule 3, at 359 and 367 (2 bits
+each, both 0).
 20 = 2 bytes of `walks_lengths` + 2 bytes of absolute deltas + 8 bytes of sign bits + 8 bytes of the
 `uint64` word of `walks_orientations` (`8 * ceil(2 / 64) = 8` each).
 

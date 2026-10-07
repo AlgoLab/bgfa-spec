@@ -148,6 +148,11 @@ every block, which header field owns which payload fields and how the size of ea
 | `compressed_segment_names_len` | `segment_names`     |
 | `compressed_segment_label_len` | `sequences`         |
 
+**Note on `uints-delta` fields.** A `uints-delta` field is not contiguous: its absolute values are stored
+inline at the field's position, while its sign `bits` field is deferred to the trailing `bits`-fields group
+of the owning `compressed_*_len` field (rule 3). The "Contains (in order)" tables above list such a field
+once, at the position of its absolute values.
+
 **Size rules.** The size of each part follows from these rules, evaluated in this order:
 
 1. **Fixed-size integer fields.** A list encoded with `fixed16`, `fixed32`, or `fixed64` has size

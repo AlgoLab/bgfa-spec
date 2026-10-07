@@ -148,3 +148,8 @@ def test_uints_delta_validation_requires_exact_termination():
     assert "do not terminate exactly at the start of the trailing sign `bits` field" in NORM_ENCODING
     assert "minus `8 * ceil(n / 64)` bytes" in NORM_ENCODING
     assert "run past the end of the owning" not in NORM_ENCODING
+
+
+def test_payload_tables_note_uints_delta_is_split():
+    assert "A `uints-delta` field is not contiguous" in NORM_BINARY
+    assert "deferred to the trailing `bits`-fields group" in NORM_BINARY

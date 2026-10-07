@@ -672,6 +672,8 @@ For `DD = 0x00` and `DD = 0x02`, bytes `RR` and `II` are reserved and MUST be `0
 
 See [CIGAR 4-byte Strategy Code Details](encoding_algorithms.md#cigar-4-byte-strategy-code-details) for wire formats.
 
+A CIGAR string cannot be `*`. That case is replace with the empty string, representing the fact that the CIGAR is missing.
+
 ### Reader Requirements
 
 - Readers MUST interpret strategy codes as simple byte sequences
@@ -1087,22 +1089,22 @@ than the string code set, because the `walks` type holds integers; see
 
 Payload (63 bytes), starting at offset 332:
 
-| Offset | Bytes                                       | Meaning                                                                            |
-| ------ | ------------------------------------------- | ---------------------------------------------------------------------------------- |
-| 332    | `00 07`                                     | `sample_ids` start position [0, 7]                                                 |
-| 334    | `07 0E`                                     | `sample_ids` end position [7, 14]                                                  |
-| 336    | `0E`                                        | `sample_ids` blob length (14)                                                      |
-| 337    | `4E 41 31 32 38 37 38 4E 41 31 32 38 37 38` | superstring `NA12878NA12878`                                                       |
-| 351    | `01 02`                                     | `haplotype_indices` [1, 2]                                                         |
-| 353    | `02 00`                                     | `sequence_ids` [2, 0]                                                              |
-| 355    | `01 00`                                     | `start_positions` absolute deltas [1, 0]                                           |
-| 357    | `00 00`                                     | `end_positions` absolute deltas [0, 0]                                             |
-| 359    | `00 00 00 00 00 00 00 00`                   | `start_positions` sign bits (2 bits, both 0)                                       |
-| 367    | `00 00 00 00 00 00 00 00`                   | `end_positions` sign bits (2 bits, both 0)                                         |
-| 375    | `01 01`                                     | `walks_lengths` [1, 1]                                                             |
-| 377    | `02 02`                                     | `walks_segments` absolute deltas [2, 2]                                            |
-| 379    | `02 00 00 00 00 00 00 00`                   | `walks_segments` sign bits [0, 1], LSB-first `0x02`                                |
-| 387    | `01 00 00 00 00 00 00 00`                   | `walks_orientations` [-, +], LSB-first `0x01`                                      |
+| Offset | Bytes                                       | Meaning                                             |
+| ------ | ------------------------------------------- | --------------------------------------------------- |
+| 332    | `00 07`                                     | `sample_ids` start position [0, 7]                  |
+| 334    | `07 0E`                                     | `sample_ids` end position [7, 14]                   |
+| 336    | `0E`                                        | `sample_ids` blob length (14)                       |
+| 337    | `4E 41 31 32 38 37 38 4E 41 31 32 38 37 38` | superstring `NA12878NA12878`                        |
+| 351    | `01 02`                                     | `haplotype_indices` [1, 2]                          |
+| 353    | `02 00`                                     | `sequence_ids` [2, 0]                               |
+| 355    | `01 00`                                     | `start_positions` absolute deltas [1, 0]            |
+| 357    | `00 00`                                     | `end_positions` absolute deltas [0, 0]              |
+| 359    | `00 00 00 00 00 00 00 00`                   | `start_positions` sign bits (2 bits, both 0)        |
+| 367    | `00 00 00 00 00 00 00 00`                   | `end_positions` sign bits (2 bits, both 0)          |
+| 375    | `01 01`                                     | `walks_lengths` [1, 1]                              |
+| 377    | `02 02`                                     | `walks_segments` absolute deltas [2, 2]             |
+| 379    | `02 00 00 00 00 00 00 00`                   | `walks_segments` sign bits [0, 1], LSB-first `0x02` |
+| 387    | `01 00 00 00 00 00 00 00`                   | `walks_orientations` [-, +], LSB-first `0x01`       |
 
 19 = 4 bytes of positions (2 starts, 2 ends) + 1 byte of blob length + 14 bytes of superstring.
 20 = 2 bytes of start-position absolute values + 2 bytes of end-position absolute values + 8 bytes of

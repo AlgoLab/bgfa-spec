@@ -153,3 +153,24 @@ def test_uints_delta_validation_requires_exact_termination():
 def test_payload_tables_note_uints_delta_is_split():
     assert "A `uints-delta` field is not contiguous" in NORM_BINARY
     assert "deferred to the trailing `bits`-fields group" in NORM_BINARY
+
+
+def test_worked_example_hex_dump_is_consistent():
+    dump = BINARY.split("Full hex dump of the file:")[1].split("```")[1]
+    data = bytearray()
+    for line in dump.splitlines():
+        if not line.strip():
+            continue
+        # Fixed columns: 4-char offset, then 16 hex bytes at 3 chars each.
+        # Slicing by column keeps the ASCII column (which may contain a space
+        # byte) out of the parse, and tolerates a short final line.
+        data.extend(int(b, 16) for b in line[4:52].split())
+    assert len(data) == 395
+    assert data[:4] == b"BGFA"
+    # The three region length fields that grew with packed sign bits:
+    # compressed_paths_len (A.4), compressed_positions_len and
+    # compressed_walk_len (A.5).
+    twenty = (20).to_bytes(8, "little")
+    assert data[178:186] == twenty
+    assert data[300:308] == twenty
+    assert data[316:324] == twenty

@@ -142,3 +142,9 @@ def test_walks_byte_order_places_sign_bits_before_orientations():
         "all segment IDs of the walks (their absolute deltas, then their trailing sign `bits` field), "
         "followed by all walks orientations" in NORM_BINARY
     )
+
+
+def test_uints_delta_validation_requires_exact_termination():
+    assert "do not terminate exactly at the start of the trailing sign `bits` field" in NORM_ENCODING
+    assert "minus `8 * ceil(n / 64)` bytes" in NORM_ENCODING
+    assert "run past the end of the owning" not in NORM_ENCODING

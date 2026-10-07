@@ -46,7 +46,6 @@ file and MUST NOT continue, as detailed in [Reader Requirements](gfa_binary_form
   - [numOperations + lengths + operations (0x01??????)](#numoperations--lengths--operations-0x01)
   - [string (0x02??????)](#string-0x02)
   - [Packed Operations String](#packed-operations-string)
-- [Run-Length Bits Encoding](#run-length-bits-encoding)
 
 ## String Encoding Overview
 
@@ -146,29 +145,34 @@ The signs are considered a sequence of bits, where + is encoded as 0 and - is en
 The i-th bit in the sign bitstream corresponds to the sign of the i-th integer in the list.
 Zero values are treated as positive (sign bit 0).
 
-The sign bitstream is written first, as a whole, before the absolute values. It covers exactly as many bits as
-there are integers in the field, and it is encoded with
-[Run-Length Bits Encoding](#run-length-bits-encoding), which is self-delimiting thanks to its leading run
-count. The absolute values then follow as one integer list encoded with the field's integer strategy.
+The sign bits form a `bits` field of exactly as many bits as there are integers in the field, packed per
+[Packed Bits](gfa_binary_format.md#packed-bits). Its size is therefore `8 * ceil(n / 64)` bytes, where `n`
+is the number of integers implied by the containing block header, and it is placed in the trailing
+`bits`-fields group of its owning `compressed_*_len` field (rule 3 of the size rules in
+[Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)). The absolute values follow as one
+integer list encoded with the field's integer strategy.
 
 **Layout of a `uints-delta` field.** In byte order, a `uints-delta` field is exactly:
 
 ```
-[sign bitstream][method preamble, if any][absolute value 0] ... [absolute value n-1]
+[method preamble, if any][absolute value 0] ... [absolute value n-1][sign bits]
 ```
 
-The sign bitstream always comes first. The "method preamble" is present only for
-[Rice (`0x07`)](#rice-0x07), whose one-byte `k` parameter therefore follows the sign bitstream and
-precedes the first absolute value. There is no preamble for any other method.
+The sign `bits` field comes last, in the trailing `bits`-fields group of the owning `compressed_*_len`
+field, per rule 3. The "method preamble" is present only for
+[Rice (`0x07`)](#rice-0x07), whose one-byte `k` parameter therefore precedes the first absolute value.
+There is no preamble for any other method.
 
 Note that there is **one delta stream per field** and it is never restarted part-way: see the `uints-delta`
 definition in [Type Definitions](gfa_binary_format.md#type-definitions).
 
-**Validation.** A reader MUST reject the field as a fatal error if the run-length bit stream does not decode to
-exactly one sign bit per integer, or if the absolute values run past the end of the owning `compressed_*_len`
-field. Negative absolute values are impossible by construction, but a decoder MUST still reject an absolute
-value that cannot be represented in the width implied by the field's integer strategy, rather than silently
-wrapping it.
+**Validation.** A reader MUST reject the field as a fatal error if the sign `bits` field does not decode to
+exactly one sign bit per integer, or if the absolute values do not terminate exactly at the start of the
+trailing sign `bits` field — that is, at `compressed_*_len` minus `8 * ceil(n / 64)` bytes. Any bytes
+between the last absolute value and the sign `bits` field are a fatal error, so a non-canonical encoding
+that pads the absolute list is rejected. Negative absolute values are impossible by construction, but a
+decoder MUST still reject an absolute value that cannot be represented in the width implied by the field's
+integer strategy, rather than silently wrapping it.
 
 **Reconstruction.** The decoded values are the running sum of the signed deltas. The first value is the
 first delta itself; every later value is the previous value plus its delta. A reader MUST reject the
@@ -291,8 +295,8 @@ Rice coding is Golomb with `b` as a power of 2: `b = 2^k`.
 - The parameter `k` is **per field** and MUST be stored explicitly as a single raw byte (not a varint),
   before any encoded value. It is not part of the strategy code. `k` MUST satisfy `1 <= k <= 31`; an
   out-of-range `k` MUST be treated as a fatal error.
-- In a `uints-delta` field this byte follows the sign bitstream and precedes the first absolute value:
-  see the layout in [Signed Integers](#signed-integers).
+- In a `uints-delta` field this byte precedes the first absolute value: see the layout in
+  [Signed Integers](#signed-integers).
 - For value n:
   - quotient q = n >> k
   - remainder r = n & (2^k - 1)
@@ -512,13 +516,15 @@ The decoder MUST reconstruct the Huffman codes from the bit-lengths using canoni
 
 4. Zero bit-length symbols are not in the alphabet and will not appear in the encoded data
 
-**Example:** Given bit-lengths: `{0x41: 2, 0x42: 3, 0x43: 3}` (symbols 'A', 'B', 'C'):
+**Example:** Given bit-lengths: `{0x41: 1, 0x42: 2, 0x43: 2}` (symbols 'A', 'B', 'C'; a `0xF4`
+codebook, since the symbols exceed the `0x04` nibble range):
 
-- Sorted by (bit-length, symbol): `[(0x41, 2), (0x42, 3), (0x43, 3)]`
+- Sorted by (bit-length, symbol): `[(0x41, 1), (0x42, 2), (0x43, 2)]`
 - Code assignment:
-  - 'A' (0x41): bit-length=2, code=0b00 (first, shortest)
-  - 'B' (0x42): bit-length=3, code=(0b00+1)<<1 = 0b010
-  - 'C' (0x43): bit-length=3, code=(0b010+1)<<0 = 0b011
+  - 'A' (0x41): bit-length=1, code=0b0 (first, shortest)
+  - 'B' (0x42): bit-length=2, code=(0b0+1)<<1 = 0b10
+  - 'C' (0x43): bit-length=2, code=(0b10+1)<<0 = 0b11
+- Kraft's equality holds: `2^15 + 2^14 + 2^14 = 65536`, so a conforming reader accepts this codebook.
 
 **Encoding process:**
 
@@ -697,8 +703,7 @@ Run-Length Encoding efficiently compresses sequences with repeated characters (h
     - If raw mode: raw bytes
     - If RLE mode: sequence of `[char: 1 byte][count: varint]` pairs
 
-**Framing.** RLE is self-delimiting through the leading run count, exactly as the run-length *bits* encoding is
-(see [Run-Length Bits Encoding](#run-length-bits-encoding)). The outer blob length of
+**Framing.** RLE is self-delimiting through the leading run count. The outer blob length of
 [Blob Framing](#blob-framing) is a byte count covering the whole of the method data described above, and is
 what a decoder uses to bound its reads; the run count is what tells it when to stop.
 
@@ -760,7 +765,7 @@ allocating the dictionary or the index array, because `N` and the offsets are at
 **Empty strings:** a string that is empty is a valid dictionary entry with `offsets[i] == offsets[i+1]`, so
 empty segment sequences (GFA `*`) are representable.
 
-**Maximum dictionary size:** 65536 entries (`N` is a `uint16`)
+**Maximum dictionary size:** 65535 entries (`N` is a `uint16`)
 
 **Expected Compression:** 60-90% reduction on highly repetitive data (e.g., sample IDs repeated across thousands of walks).
 
@@ -779,7 +784,7 @@ The following decomposition strategies are available:
 
 | Format       | Bytes              | Strategy                             |
 | ------------ | ------------------ | ------------------------------------ |
-| `0x00??????` | `[00, 00, 00, SS]` | none (identity); `RR` and `II` reserved |
+| `0x00??????` | `[00, 00, 00, SS]` | none (identity); `RR`, `II` and `SS` reserved |
 | `0x01??????` | `[01, RR, II, SS]` | numOperations + lengths + operations |
 | `0x02??????` | `[02, 00, 00, SS]` | string (treat as plain string)       |
 
@@ -795,7 +800,7 @@ The `record_num` CIGAR entries are written as raw ASCII, each followed by a line
 therefore `record_num` terminated entries; a decoder MUST split on `0x0A` and drop the final terminator, which
 yields exactly `record_num` entries. Because the terminator guarantees the last entry is present, an entry may
 be the empty string, which is how "no CIGAR" is represented. The entry text is not compressed; `SS` is
-ignored on read and MUST be `0x00` when writing.
+reserved and MUST be `0x00`; a reader MUST reject any other value as an invalid strategy code.
 
 An entry MUST NOT contain a `0x0A` byte, since `0x0A` is the entry separator. A reader MUST treat an entry
 count other than `record_num` after splitting as a fatal error.
@@ -904,44 +909,3 @@ NOT be used here.
 - with `RR = II = 0x01` (varint) and `SS = 0x00` (none), and assuming a single entry in the block, the whole
   payload is: `01` (one CIGAR entry) `03` (3 operations in this entry) `0A 02 05` (lengths 10, 2, 5) `01 2F`
   (packed operations)
-
-## Run-Length Bits Encoding
-
-A sequence of bits is run-length encoded, specialised to bits. This is the encoding used for the sign bits of
-a `uints-delta` field (see [Signed Integers](#signed-integers)), so it must be self-delimiting.
-
-The encoding is a leading run count followed by one length per run:
-
-```
-[run count: varint][L(1): varint][L(2): varint] ... [L(k): varint]
-```
-
-where
-
-- `run count` is `k`, the number of runs. It is written first as a `varint`, which is the terminator the
-  decoder needs: after reading `k` the decoder knows to read exactly `k` more varints and then stop.
-- `L(1)` is the length of the leading zeroes in the sequence. `L(1) = 0` if the first bit of the sequence is 1.
-- `L(2)` is the length of the ones immediately after the first `L(1)` bits, minus 1.
-- `L(3)` is the length of the zeroes immediately after the first `L(1) + L(2)` bits, minus 1, and so on.
-
-The bit value of a run is implied by its index: even-indexed runs (0, 2, 4, ...) are zeroes, odd-indexed runs
-are ones. This is why no bit is stored per run.
-
-**Constraints on the lengths.** `L(1)` MAY be `0`, and is 0 exactly when the first bit of the sequence is a
-one. For every `i >= 2`, `L(i) >= 1`, because the stored value is `L(i) - 1` and its minimum legal stored
-value `0` therefore means a run of one bit. A zero-length run for `i >= 2` is not representable: consecutive
-runs have opposite values by construction, so an empty run cannot arise, and a reader MUST reject a stored
-value that would underflow it.
-
-All lengths are written as `varint`s. Because the run count is itself a `varint`, an empty bit sequence (0 bits)
-is encoded as a single byte `0x00`, i.e. `run count = 0`, and a decoder MUST accept it.
-
-For example the sequence of bits 00011010110101001 has run lengths
-[3, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1], and is therefore encoded as `0C 03 01 00 00 00 01 00 00 00 00 01 00`
-(12 runs, then 12 varints).
-
-**Validation.** A reader MUST reject the field as a fatal error if `k` or any of the `k` lengths would extend
-past the end of the owning `compressed_*_len` field, or if the total decoded length differs from the number
-of bits the field is required to cover. The reader MUST bound `k` by the remaining bytes **before**
-allocating the run list, and MUST accumulate run lengths with overflow checking rather than in a single
-unbounded sum.

@@ -89,7 +89,8 @@ def test_sign_bits_are_packed_bits_fields():
 def test_worked_examples_use_packed_sign_bits():
     assert "2 bytes of sign bits" not in NORM_BINARY
     assert "3 bytes of sign bits" not in NORM_BINARY
-    assert "8 bytes of sign bits" in NORM_BINARY
+    assert "| 224 | `00 00 00 00 00 00 00 00` | `walks_segments` sign bits (3 bits, all 0) |" in NORM_BINARY
+    assert "| 379 | `02 00 00 00 00 00 00 00` | `walks_segments` sign bits [0, 1], LSB-first `0x02` |" in NORM_BINARY
     assert "run-length bits" not in NORM_BINARY
     assert "372 bytes" not in NORM_BINARY
     assert "395 bytes" in NORM_BINARY

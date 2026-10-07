@@ -174,3 +174,13 @@ def test_worked_example_hex_dump_is_consistent():
     assert data[178:186] == twenty
     assert data[300:308] == twenty
     assert data[316:324] == twenty
+
+
+def test_signed_integers_terminology_and_prose_order():
+    assert "sign bitstream" not in NORM_ENCODING
+    assert "The i-th bit in the sign `bits` field corresponds to the sign" in NORM_ENCODING
+    assert (
+        "so the absolute values are [0, 1, 0, 1, 1], encoded per the integer strategy in the second byte "
+        "of `compression_walks`, followed by the sign bits [0, 0, 0, 0, 0] packed into a trailing `bits` "
+        "field" in NORM_BINARY
+    )

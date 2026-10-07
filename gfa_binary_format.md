@@ -798,10 +798,10 @@ The concatenated segment ID sequence is [0, 1, 1, 2, 3] (5 elements = `uncompres
 encoded as:
 
 - `walks_lengths`: [2, 3] (encoded per the integer strategy in the first byte of `compression_walks`)
-- `walks_segments`: the deltas of [0, 1, 1, 2, 3] are [0, +1, 0, +1, +1], so the sign bits are [0, 0, 0, 0, 0]
-  (packed into a trailing `bits` field) and the absolute values are [0, 1, 0, 1, 1], encoded per the integer
-  strategy in the second byte of `compression_walks`. The single delta stream continues across the walk
-  boundary (segment 1 of walk 2 is delta 0 against segment 1 of walk 1).
+- `walks_segments`: the deltas of [0, 1, 1, 2, 3] are [0, +1, 0, +1, +1], so the absolute values are
+  [0, 1, 0, 1, 1], encoded per the integer strategy in the second byte of `compression_walks`, followed by
+  the sign bits [0, 0, 0, 0, 0] packed into a trailing `bits` field. The single delta stream continues
+  across the walk boundary (segment 1 of walk 2 is delta 0 against segment 1 of walk 1).
 - `walks_orientations`: [0, 1, 0, 0, 1] (0=+, 1=- for each segment), packed as bits
 
 ## Walks and Paths: Type Note

@@ -142,7 +142,7 @@ A list of signed integers is encoded by two parts:
 - the absolute values of all integers (unsigned ints). The encoding strategy applies to this part only.
 
 The signs are considered a sequence of bits, where + is encoded as 0 and - is encoded with 1.
-The i-th bit in the sign bitstream corresponds to the sign of the i-th integer in the list.
+The i-th bit in the sign `bits` field corresponds to the sign of the i-th integer in the list.
 Zero values are treated as positive (sign bit 0).
 
 The sign bits form a `bits` field of exactly as many bits as there are integers in the field, packed per

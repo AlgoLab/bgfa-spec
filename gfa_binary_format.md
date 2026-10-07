@@ -38,8 +38,8 @@
   - [A.1 File header](#a1-file-header-17-bytes-offsets-0-16)
   - [A.2 Segments block](#a2-segments-block-82-bytes-offsets-17-98)
   - [A.3 Links block](#a3-links-block-56-bytes-offsets-99-154)
-  - [A.4 Paths block](#a4-paths-block-80-bytes-offsets-155-234)
-  - [A.5 Walks block](#a5-walks-block-137-bytes-offsets-235-371)
+  - [A.4 Paths block](#a4-paths-block-86-bytes-offsets-155-240)
+  - [A.5 Walks block](#a5-walks-block-154-bytes-offsets-241-394)
   - [A.6 Round-trip](#a6-round-trip)
 
 ## Binary GFA file: overall structure
@@ -103,7 +103,7 @@ To read a block from a BGFA file, a reader follows these steps:
 1. **Read the block header**: Parse the `section_id` (1 byte) to determine the block type, then parse the remaining header fields according to the block type's header layout.
 2. **Determine payload size**: The total payload size is the sum of all `compressed_*_len` fields in the header. Each `compressed_*_len` covers the whole encoded payload of its field, including any integer metadata list and blob.
 3. **Parse each payload field**: For each field, use the strategy code to determine how to decode it. The strategy
-   codes are different, depending on the type of data we want to store. For `strings` fields, read the metadata (integer positions list encoded per the first-byte strategy), then read the compressed blob (encoded per the second-byte strategy). For `uints` fields, the entire payload is the integer list encoded per the strategy code. For `uints-delta` fields, the entire payload is the signed integer encoded delta list (see [Signed Integers](encoding_algorithms.md#signed-integers)). For `bits` fields, read raw bits using the known bit count (see [Packed Bits](#packed-bits)).
+   codes are different, depending on the type of data we want to store. For `strings` fields, read the metadata (integer positions list encoded per the first-byte strategy), then read the compressed blob (encoded per the second-byte strategy). For `uints` fields, the entire payload is the integer list encoded per the strategy code. For `uints-delta` fields, the payload is the absolute values of the deltas followed by the sign `bits` field (see [Signed Integers](encoding_algorithms.md#signed-integers)). For `bits` fields, read raw bits using the known bit count (see [Packed Bits](#packed-bits)).
 4. **Reconstruct data**: Use the metadata and strategy codes to decode each field back to its original form.
 
 For implementation details of each encoding method, see [encoding_algorithms.md](encoding_algorithms.md).
@@ -136,7 +136,7 @@ every block, which header field owns which payload fields and how the size of ea
 | `compressed_*_len` field    | Contains (in order)                |
 | --------------------------- | ---------------------------------- |
 | `compressed_sample_ids_len` | `sample_ids`                       |
-| `compressed_hep_len`        | `haplotype_indices`                |
+| `compressed_haplotype_len`  | `haplotype_indices`                |
 | `compressed_sequence_len`   | `sequence_ids`                     |
 | `compressed_positions_len`  | `start_positions`, `end_positions` |
 | `compressed_walk_len`       | `walks` (`walks` type)             |
@@ -152,14 +152,25 @@ every block, which header field owns which payload fields and how the size of ea
 
 1. **Fixed-size integer fields.** A list encoded with `fixed16`, `fixed32`, or `fixed64` has size
    `n * 2`, `n * 4`, or `n * 8`, where `n` is the number of integers implied by the header
-   (`record_num`, `2 * record_num` for the Walks positions field, or `uncompressed_walk_len`).
-2. **Self-delimiting integer fields.** A list encoded with `varint`, `none`, `Elias gamma`,
-   `Elias omega`, `Golomb`, `Rice`, `StreamVByte`, or `VByte` MUST be decoded for exactly the number of
-   integers implied by the header, and MUST consume no more bytes than remain in its owning
-   `compressed_*_len` field. Decoding stops at the count, not at the end of the range.
+   (`record_num`; `record_num` for **each** of the Walks `start_positions` and `end_positions`
+   sub-fields, which have the independent strategies `compression_positions_start` and
+   `compression_positions_end`; or `uncompressed_walk_len` for the `walks_segments` absolute values).
+   For a `uints-delta` field this fixed-width size applies to the absolute values of the deltas; the
+   sign bits are a separate `bits` field covered by rule 3.
+2. **Self-delimiting integer fields.** A list encoded with `varint`, `Elias gamma`, `Elias omega`,
+   `Golomb`, `Rice`, `StreamVByte`, or `VByte` MUST be decoded for exactly the number of integers
+   implied by the header, and MUST consume no more bytes than remain in its owning `compressed_*_len`
+   field. Decoding stops at the count, not at the end of the range. (`none` is not a valid integer
+   strategy: `0x00` is excluded from integer positions — see
+   [Integer Encoding Methods](#integer-encoding-methods).)
 3. **`bits` fields.** A `bits` field always occupies `8 * ceil(n / 64)` bytes, where `n` is the number of
-   bits (see [Packed Bits](#packed-bits)). A `bits` field is always the **last** part of its owning
-   `compressed_*_len` field, so its start offset is `compressed_*_len` minus `8 * ceil(n / 64)`.
+   bits (see [Packed Bits](#packed-bits)). A `bits` field is never followed by a non-`bits` field: the
+   `bits` fields come at the end of their owning `compressed_*_len` field. When an owning field contains
+   more than one `bits` field, they appear in the trailing group in **block field order** — the order in
+   which the fields are listed for that block — and a `uints-delta` field's sign bits rank at that field's
+   own position in that order. The start offset of the first `bits` field is `compressed_*_len` minus the
+   total byte size of all `bits` fields it owns (e.g. `16 * ceil(record_num / 64)` for the Links block's
+   `from_orientation` and `to_orientation`); "first" means first in that order.
 4. **Blobs.** A `strings` field is `metadata` + `blob`, and the blob carries a leading `varint` blob length, so
    the blob is self-delimiting (see [Blob Framing](encoding_algorithms.md#blob-framing)). The blob length is
    **always a byte count**. The single exception is the Dictionary method (`0x0A`), which replaces this layout
@@ -397,7 +408,7 @@ The following is the sequence of fields making up the header.
 | `record_num`                  | number of records in the block                                       | `uint16`   |
 | **Compression strategies**    |                                                                      |            |
 | `compression_sample_ids`      | Encoding strategy for the sample IDs (2 bytes)                       | `bytes[2]` |
-| `compression_hep`             | Integer encoding strategy for the haplotype indices                  | `byte`     |
+| `compression_haplotype`       | Integer encoding strategy for the haplotype indices                  | `byte`     |
 | `compression_sequence`        | Integer encoding strategy for the walk sequence IDs                  | `bytes[2]` |
 | `compression_positions_start` | Integer encoding strategy for the start positions                    | `byte`     |
 | `compression_positions_end`   | Integer encoding strategy for the end positions                      | `byte`     |
@@ -406,8 +417,8 @@ The following is the sequence of fields making up the header.
 | `compressed_sample_ids_len`   | number of bytes of the encoded sample IDs payload                    | `uint64`   |
 | `uncompressed_sample_ids_len` | sum of the lengths of uncompressed sample IDs                        | `uint64`   |
 | **Haplotype indices field**   |                                                                      |            |
-| `compressed_hep_len`          | number of bytes of the encoded haplotype indices payload             | `uint64`   |
-| `uncompressed_hep_len`        | number of haplotype indices = `record_num`                           | `uint64`   |
+| `compressed_haplotype_len`    | number of bytes of the encoded haplotype indices payload             | `uint64`   |
+| `uncompressed_haplotype_len`  | number of haplotype indices = `record_num`                           | `uint64`   |
 | **Walk sequence IDs field**   |                                                                      |            |
 | `compressed_sequence_len`     | number of bytes of the encoded walk sequence IDs payload             | `uint64`   |
 | `uncompressed_sequence_len`   | number of walk sequence IDs = `record_num`                           | `uint64`   |
@@ -425,16 +436,16 @@ The following is the sequence of fields making up the payload layout.
 | Field               | Description                                            | Type          | Bytes                            |
 | ------------------- | ------------------------------------------------------ | ------------- | -------------------------------- |
 | `sample_ids`        | Sample IDs                                             | `strings`     | `compressed_sample_ids_len`      |
-| `haplotype_indices` | Haplotype indices                                      | `uints`       | `compressed_hep_len`             |
+| `haplotype_indices` | Haplotype indices                                      | `uints`       | `compressed_haplotype_len`       |
 | `sequence_ids`      | Walk sequence IDs                                      | `string`      | `compressed_sequence_len`        |
 | `start_positions`   | Start positions                                        | `uints-delta` | `compressed_positions_len` (1st) |
 | `end_positions`     | End positions                                          | `uints-delta` | `compressed_positions_len` (2nd) |
 | `walks`             | Walks, each walk is a sequence of oriented segment IDs | `walks`       | `compressed_walk_len`            |
 
-**Layout:** `sample_ids`, `haplotype_indices`, `sequence_ids` and `compressed_positions_len` occupy the
-header fields of the same name; `compressed_positions_len` contains `start_positions` first, then
-`end_positions`. `walks` occupies `compressed_walk_len`. See
-[Payload Byte Layouts](#payload-byte-layouts).
+**Layout:** each payload field occupies the header field that owns it: `sample_ids` →
+`compressed_sample_ids_len`, `haplotype_indices` → `compressed_haplotype_len`, `sequence_ids` →
+`compressed_sequence_len`, and `start_positions` then `end_positions` → `compressed_positions_len`.
+`walks` occupies `compressed_walk_len`. See [Payload Byte Layouts](#payload-byte-layouts).
 
 Since there are `record_num` records in the block, the block contains `record_num` sample IDs, followed by `record_num`
 haplotype indices, followed by `record_num` sequence IDs, followed by `record_num` start positions, followed by
@@ -458,11 +469,11 @@ haplotype indices, followed by `record_num` sequence IDs, followed by `record_nu
 - `end_position`: the 1-based end coordinate of the walk on `sequence_id`, as in the GFA W record.
   For both `start_position` and `end_position`, the value `0` encodes a missing position. The bytes MUST still be present and decodable.
 
-  > **This field is dead weight.** It carries no information: writers must emit `record_num` always-zero
-  > values, and readers must decode and discard them. It is kept only so that a future version can give it a
-  > meaning without a header change. It costs roughly one varint byte per walk record in every Walks block,
-  > which is significant for walk-heavy pangenome files. It should be reconsidered — or dropped — before
-  > version 1.0 is released, at which point no file has to be migrated.
+  > **This field is reserved for future use and stays in the wire format, including in version 1.0.**
+  > It carries no information in version 0: writers must emit `record_num` always-zero values, and readers
+  > must decode and discard them. It is kept so that a future version can give it a meaning without a
+  > header change. The cost — roughly one varint byte per walk record in every Walks block, which is
+  > significant for walk-heavy pangenome files — is an accepted trade-off.
 
 ## Conventions
 
@@ -483,8 +494,8 @@ All bytes data are packed into bytes.
 
 - The `bits` type (orientations, signs) is packed LSB-first into little-endian `uint64` words. See
   [Packed Bits](#packed-bits).
-- All other bit streams — that is, the bit streams produced by Elias gamma/omega, Golomb, Rice, run-length bits,
-  Huffman, 2-bit DNA, and any other bit-oriented method — are packed **MSB-first**: the first bit of the
+- All other bit streams — that is, the bit streams produced by Elias gamma/omega, Golomb, Rice, Huffman,
+  2-bit DNA, and any other bit-oriented method — are packed **MSB-first**: the first bit of the
   stream occupies bit 7 of the first byte, the second bit 6, and so on.
 
 In both cases, any remaining bits in the final byte or word of a bit stream are set to 0 when writing and MUST
@@ -758,15 +769,17 @@ The `walks` layout is made by the following sequence of fields.
 | `walks_orientations` | The orientations of the walks                                                           | `bits`        |
 
 - All lengths of the walks are followed by all segment IDs of the walks, followed by all walks orientations.
-- The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` from the containing block header.
-- The `walks_segments` field contains a sequence of `uncompressed_walk_len` integers. The first L(1) integers form the sequence of segment IDs of the first walk, then the subsequent L(2) integers form the sequence of the segment IDs of the second walk, etc.
-- The `walks_orientations` field contains a sequence of `uncompressed_walk_len` bits. The first L(1) bits form the sequence of segment orientations of the first walk, then the subsequent L(2) bits form the sequence of the segment orientations of the second walk. Orientation `+` or `>` is encoded as `0`, while `-` or `<` is encoded as 1.
+- The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` in a Walks block and `uncompressed_paths_len` in a Paths block.
+- The `walks_segments` field contains a sequence of `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) integers. The first L(1) integers form the sequence of segment IDs of the first walk, then the subsequent L(2) integers form the sequence of the segment IDs of the second walk, etc.
+- The `walks_orientations` field contains a sequence of `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) bits. The first L(1) bits form the sequence of segment orientations of the first walk, then the subsequent L(2) bits form the sequence of the segment orientations of the second walk. Orientation `+` or `>` is encoded as `0`, while `-` or `<` is encoded as 1.
 
 ### Encoding strategies
 
-- `walks_lengths` are encoded using the integer encoding strategy specified in the first byte of the `compression_walks`
-  field in the containing block header.
-- `walks_segments` are encoded using the `uints-delta` type, which applies signed integer encoding (see [Signed Integers](encoding_algorithms.md#signed-integers)). The integer encoding strategy is specified in the second byte of the `compression_walks` field in the containing block header and applies to the absolute values of the deltas. There is one delta stream over the **whole field**: the stream is not restarted at walk boundaries.
+The strategy field is `compression_walks` in a Walks block and `compression_paths` in a Paths block.
+
+- `walks_lengths` are encoded using the integer encoding strategy specified in the first byte of that
+  field.
+- `walks_segments` are encoded using the `uints-delta` type, which applies signed integer encoding (see [Signed Integers](encoding_algorithms.md#signed-integers)). The integer encoding strategy is specified in the second byte of that field and applies to the absolute values of the deltas. There is one delta stream over the **whole field**: the stream is not restarted at walk boundaries.
   For example, for the sequence of segment IDs [50, 48, 61] we compute deltas [50, -2, 13]. The sign bits are [0, 1, 0] and the absolute values [50, 2, 13] are encoded per the integer strategy.
 - the `walks_orientations` field is always encoded as a bit sequence [Packed Bits](#packed-bits).
 
@@ -780,9 +793,9 @@ encoded as:
 
 - `walks_lengths`: [2, 3] (encoded per the integer strategy in the first byte of `compression_walks`)
 - `walks_segments`: the deltas of [0, 1, 1, 2, 3] are [0, +1, 0, +1, +1], so the sign bits are [0, 0, 0, 0, 0]
-  and the absolute values are [0, 1, 0, 1, 1], encoded per the integer strategy in the second byte of
-  `compression_walks`. The single delta stream continues across the walk boundary (segment 1 of walk 2 is
-  delta 0 against segment 1 of walk 1).
+  (packed into a trailing `bits` field) and the absolute values are [0, 1, 0, 1, 1], encoded per the integer
+  strategy in the second byte of `compression_walks`. The single delta stream continues across the walk
+  boundary (segment 1 of walk 2 is delta 0 against segment 1 of walk 1).
 - `walks_orientations`: [0, 1, 0, 0, 1] (0=+, 1=- for each segment), packed as bits
 
 ## Walks and Paths: Type Note
@@ -813,6 +826,9 @@ A `bits` field represents a list of bits packed into `uint64` words in little-en
 - **Walks type orientations** (`walks_orientations`): `n` is the total number of segment occurrences in the
   containing block header, i.e. `uncompressed_walk_len` in a Walks block and `uncompressed_paths_len` in a
   Paths block
+- **`uints-delta` sign bits**: `n` is the number of integers in the field, i.e. `record_num` for each of the
+  Walks `start_positions` and `end_positions` sub-fields, and `uncompressed_walk_len` (Walks block) or
+  `uncompressed_paths_len` (Paths block) for `walks_segments`
 
 **Size calculation:** Number of uint64 words = `ceil(n / 64)`. Total bytes for a `bits` field = `8 * ceil(n / 64)`.
 A `bits` field therefore always occupies a whole number of 8-byte words; it is never packed tightly against a
@@ -986,7 +1002,7 @@ Payload (24 bytes), starting at offset 131:
 The two `bits` fields occupy the last 16 bytes of the 20-byte region, so `from_ids` and `to_ids` occupy the
 first 20 - 16 = 4 bytes. With `record_num = 2` each bit field is one word, `8 * ceil(2 / 64) = 8` bytes.
 
-### A.4 Paths block (80 bytes, offsets 155-234)
+### A.4 Paths block (86 bytes, offsets 155-240)
 
 Header (59 bytes):
 
@@ -998,13 +1014,13 @@ Header (59 bytes):
 | `compressed_path_names_len`     | `06 00 00 00 00 00 00 00` | 6                                                      |
 | `uncompressed_path_names_len`   | `03 00 00 00 00 00 00 00` | 3                                                      |
 | `compression_paths`             | `01 01`                   | varint + varint                                        |
-| `compressed_paths_len`          | `0E 00 00 00 00 00 00 00` | 14                                                     |
+| `compressed_paths_len`          | `14 00 00 00 00 00 00 00` | 20                                                     |
 | `uncompressed_paths_len`        | `03 00 00 00 00 00 00 00` | 3                                                      |
 | `compression_paths_cigars`      | `00 00 00 00`             | none decomposition (`DD = 0x00`, all reserved bytes 0) |
 | `compressed_paths_cigars_len`   | `01 00 00 00 00 00 00 00` | 1                                                      |
 | `uncompressed_paths_cigars_len` | `00 00 00 00 00 00 00 00` | 0                                                      |
 
-Payload (21 bytes), starting at offset 214:
+Payload (27 bytes), starting at offset 214:
 
 | Offset | Bytes                     | Meaning                                                                              |
 | ------ | ------------------------- | ------------------------------------------------------------------------------------ |
@@ -1013,17 +1029,17 @@ Payload (21 bytes), starting at offset 214:
 | 216    | `03`                      | `path_names` blob length (3)                                                         |
 | 217    | `70 30 31`                | superstring `p01`                                                                    |
 | 220    | `03`                      | `walks_lengths` [3]                                                                  |
-| 221    | `01 03`                   | `walks_segments` sign bits, run-length bits: `varint k = 1`, single run of 3 zeros   |
-| 223    | `00 01 01`                | `walks_segments` absolute deltas [0, 1, 1]                                           |
-| 226    | `02 00 00 00 00 00 00 00` | `walks_orientations` [+, -, +], LSB-first `0x02`                                     |
-| 234    | `0A`                      | CIGARs: the path has no CIGAR, so the single empty entry is just the `\n` terminator |
+| 221    | `00 01 01`                | `walks_segments` absolute deltas [0, 1, 1]                                           |
+| 224    | `00 00 00 00 00 00 00 00` | `walks_segments` sign bits (3 bits, all 0)                                           |
+| 232    | `02 00 00 00 00 00 00 00` | `walks_orientations` [+, -, +], LSB-first `0x02`                                     |
+| 240    | `0A`                      | CIGARs: the path has no CIGAR, so the single empty entry is just the `\n` terminator |
 
-6 = 2 bytes of positions + 1 byte of blob length + 3 bytes of superstring. 14 = 1 byte of `walks_lengths` +
-2 bytes of sign bits + 3 bytes of absolute deltas + 8 bytes of the `uint64` word of `walks_orientations`
-(`8 * ceil(3 / 64) = 8`). The path has no CIGAR, so the CIGAR list holds one empty string, which the `none`
+6 = 2 bytes of positions + 1 byte of blob length + 3 bytes of superstring. 20 = 1 byte of `walks_lengths` +
+3 bytes of absolute deltas + 8 bytes of sign bits + 8 bytes of the `uint64` word of `walks_orientations`
+(`8 * ceil(3 / 64) = 8` each). The path has no CIGAR, so the CIGAR list holds one empty string, which the `none`
 decomposition writes as a lone `\n`.
 
-### A.5 Walks block (137 bytes, offsets 235-371)
+### A.5 Walks block (154 bytes, offsets 241-394)
 
 Header (91 bytes):
 
@@ -1032,20 +1048,20 @@ Header (91 bytes):
 | `section_id`                  | `05`                      | 5 = walks                      |
 | `record_num`                  | `02 00`                   | 2                              |
 | `compression_sample_ids`      | `01 00`                   | varint + none                  |
-| `compression_hep`             | `01`                      | varint for `haplotype_indices` |
+| `compression_haplotype`       | `01`                      | varint for `haplotype_indices` |
 | `compression_sequence`        | `01`                      | varint for `sequence_ids`      |
 | `compression_positions_start` | `01`                      | varint for the start positions |
 | `compression_positions_end`   | `01`                      | varint for the end positions   |
 | `compression_walks`           | `01 01`                   | varint + varint                |
 | `compressed_sample_ids_len`   | `13 00 00 00 00 00 00 00` | 19                             |
 | `uncompressed_sample_ids_len` | `0E 00 00 00 00 00 00 00` | 14                             |
-| `compressed_hep_len`          | `02 00 00 00 00 00 00 00` | 2                              |
-| `uncompressed_hep_len`        | `02 00 00 00 00 00 00 00` | 2                              |
+| `compressed_haplotype_len`    | `02 00 00 00 00 00 00 00` | 2                              |
+| `uncompressed_haplotype_len`  | `02 00 00 00 00 00 00 00` | 2                              |
 | `compressed_sequence_len`     | `02 00 00 00 00 00 00 00` | 2                              |
 | `uncompressed_sequence_len`   | `02 00 00 00 00 00 00 00` | 2                              |
-| `compressed_positions_len`    | `08 00 00 00 00 00 00 00` | 8                              |
+| `compressed_positions_len`    | `14 00 00 00 00 00 00 00` | 20                             |
 | `uncompressed_positions_len`  | `04 00 00 00 00 00 00 00` | 4                              |
-| `compressed_walk_len`         | `0F 00 00 00 00 00 00 00` | 15                             |
+| `compressed_walk_len`         | `14 00 00 00 00 00 00 00` | 20                             |
 | `uncompressed_walk_len`       | `02 00 00 00 00 00 00 00` | 2                              |
 
 The header is `1 + 2 + 2 + 4 + 2` bytes of section ID, record count and strategy codes, followed by ten
@@ -1055,33 +1071,37 @@ The header is `1 + 2 + 2 + 4 + 2` bytes of section ID, record count and strategy
 than the string code set, because the `walks` type holds integers; see
 [Encoding strategies](#encoding-strategies).
 
-Payload (46 bytes), starting at offset 326:
+Payload (63 bytes), starting at offset 332:
 
 | Offset | Bytes                                       | Meaning                                                                            |
 | ------ | ------------------------------------------- | ---------------------------------------------------------------------------------- |
-| 326    | `00 07`                                     | `sample_ids` start position [0, 7]                                                 |
-| 328    | `07 0E`                                     | `sample_ids` end position [7, 14]                                                  |
-| 330    | `0E`                                        | `sample_ids` blob length (14)                                                      |
-| 331    | `4E 41 31 32 38 37 38 4E 41 31 32 38 37 38` | superstring `NA12878NA12878`                                                       |
-| 345    | `01 02`                                     | `haplotype_indices` [1, 2]                                                         |
-| 347    | `02 00`                                     | `sequence_ids` [2, 0]                                                              |
-| 349    | `01 02 01 00`                               | `start_positions`: `uints-delta` for the values [1, 1]                             |
-| 353    | `01 02 00 00`                               | `end_positions`: `uints-delta` for the always-written values [0, 0]                |
-| 357    | `01 01`                                     | `walks_lengths` [1, 1]                                                             |
-| 359    | `02 01 00`                                  | `walks_segments` sign bits, run-length bits: `varint k = 2`, one zero then one one |
-| 362    | `02 02`                                     | `walks_segments` absolute deltas [2, 2]                                            |
-| 364    | `01 00 00 00 00 00 00 00`                   | `walks_orientations` [-, +], LSB-first `0x01`                                      |
+| 332    | `00 07`                                     | `sample_ids` start position [0, 7]                                                 |
+| 334    | `07 0E`                                     | `sample_ids` end position [7, 14]                                                  |
+| 336    | `0E`                                        | `sample_ids` blob length (14)                                                      |
+| 337    | `4E 41 31 32 38 37 38 4E 41 31 32 38 37 38` | superstring `NA12878NA12878`                                                       |
+| 351    | `01 02`                                     | `haplotype_indices` [1, 2]                                                         |
+| 353    | `02 00`                                     | `sequence_ids` [2, 0]                                                              |
+| 355    | `01 00`                                     | `start_positions` absolute deltas [1, 0]                                           |
+| 357    | `00 00`                                     | `end_positions` absolute deltas [0, 0]                                             |
+| 359    | `00 00 00 00 00 00 00 00`                   | `start_positions` sign bits (2 bits, both 0)                                       |
+| 367    | `00 00 00 00 00 00 00 00`                   | `end_positions` sign bits (2 bits, both 0)                                         |
+| 375    | `01 01`                                     | `walks_lengths` [1, 1]                                                             |
+| 377    | `02 02`                                     | `walks_segments` absolute deltas [2, 2]                                            |
+| 379    | `02 00 00 00 00 00 00 00`                   | `walks_segments` sign bits [0, 1], LSB-first `0x02`                                |
+| 387    | `01 00 00 00 00 00 00 00`                   | `walks_orientations` [-, +], LSB-first `0x01`                                      |
 
 19 = 4 bytes of positions (2 starts, 2 ends) + 1 byte of blob length + 14 bytes of superstring.
-8 = 4 bytes for the start positions + 4 bytes for the end positions. Each `uints-delta` field is a
-run-length sign stream followed by the absolute values, so `01 02` is `k = 1` and one run of two zero
-bits, then `01 00` are the encoded magnitudes; the end positions follow the same shape with magnitude `0`.
-15 = 2 bytes of `walks_lengths` + 3 bytes of sign bits + 2 bytes of absolute deltas + 8 bytes of the
-`uint64` word of `walks_orientations` (`8 * ceil(2 / 64) = 8`).
+20 = 2 bytes of start-position absolute values + 2 bytes of end-position absolute values + 8 bytes of
+start-position sign bits + 8 bytes of end-position sign bits. Each `uints-delta` field is its absolute
+values followed by its sign `bits` field, so `01 00` are the start-position magnitudes [1, 0] and the
+following 8 bytes hold the two sign bits (both 0); the end positions follow the same shape with
+magnitude `0`.
+20 = 2 bytes of `walks_lengths` + 2 bytes of absolute deltas + 8 bytes of sign bits + 8 bytes of the
+`uint64` word of `walks_orientations` (`8 * ceil(2 / 64) = 8` each).
 
 The two walks have segment IDs [2, 0], so the single delta stream over the whole field is [2, -2]: the
 sign bits are [0, 1] and the absolute values are [2, 2]. The stream is **not** restarted at the walk
-boundary, which is why both records share one run-length stream and one absolute-value list.
+boundary, which is why both records share one delta stream and one absolute-value list.
 
 Four features of this block are worth checking against the rules above:
 
@@ -1095,11 +1115,11 @@ Four features of this block are worth checking against the rules above:
 - `haplotype_indices` is 1-based, so the two records carry `1` and `2` for the two haplotypes of sample
   `NA12878`.
 - The single delta stream spans the walk boundary, so the change of sign between the two walks is absorbed
-  inside one run-length stream rather than starting a new one.
+  inside one delta stream rather than starting a new one.
 
 ### A.6 Round-trip
 
-Decoding the 372 bytes with a reader written from this specification and re-emitting GFA yields the records
+Decoding the 395 bytes with a reader written from this specification and re-emitting GFA yields the records
 below. They match the input GFA except in two documented ways: the `#` comment lines are not stored, and
 both walk `SeqEnd` values are lost, `7` and `5` coming back as `0` because `end_positions` is unused (see
 A.5 and [Known Limitations of Version 0](#known-limitations-of-version-0)). Every other column, both
@@ -1118,7 +1138,7 @@ W	NA12878	1	scs	1	0	scs-
 W	NA12878	2	sas	1	0	sas+
 ```
 
-Total size: 372 bytes (17 + 82 + 56 + 80 + 137).
+Total size: 395 bytes (17 + 82 + 56 + 86 + 154).
 
 Full hex dump of the file:
 
@@ -1134,17 +1154,18 @@ Full hex dump of the file:
  128  00 00 00 00 01 01 02 02 00 00 00 00 00 00 00 01  ................
  144  00 00 00 00 00 00 00 2a 0a 2a 0a 04 01 00 01 00  .......*.*......
  160  06 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00  ................
- 176  01 01 0e 00 00 00 00 00 00 00 03 00 00 00 00 00  ................
+ 176  01 01 14 00 00 00 00 00 00 00 03 00 00 00 00 00  ................
  192  00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00  ................
- 208  00 00 00 00 00 00 00 03 03 70 30 31 03 01 03 00  .........p01....
- 224  01 01 02 00 00 00 00 00 00 00 0a 05 02 00 01 00  ................
- 240  01 01 01 01 01 01 13 00 00 00 00 00 00 00 0e 00  ................
- 256  00 00 00 00 00 00 02 00 00 00 00 00 00 00 02 00  ................
- 272  00 00 00 00 00 00 02 00 00 00 00 00 00 00 02 00  ................
- 288  00 00 00 00 00 00 08 00 00 00 00 00 00 00 04 00  ................
- 304  00 00 00 00 00 00 0f 00 00 00 00 00 00 00 02 00  ................
- 320  00 00 00 00 00 00 00 07 07 0e 0e 4e 41 31 32 38  ...........NA128
- 336  37 38 4e 41 31 32 38 37 38 01 02 02 00 01 02 01  78NA12878.......
- 352  00 01 02 00 00 01 01 02 01 00 02 02 01 00 00 00  ................
- 368  00 00 00 00                                     ....
+ 208  00 00 00 00 00 00 00 03 03 70 30 31 03 00 01 01  .........p01....
+ 224  00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00  ................
+ 240  0a 05 02 00 01 00 01 01 01 01 01 01 13 00 00 00  ................
+ 256  00 00 00 00 0e 00 00 00 00 00 00 00 02 00 00 00  ................
+ 272  00 00 00 00 02 00 00 00 00 00 00 00 02 00 00 00  ................
+ 288  00 00 00 00 02 00 00 00 00 00 00 00 14 00 00 00  ................
+ 304  00 00 00 00 04 00 00 00 00 00 00 00 14 00 00 00  ................
+ 320  00 00 00 00 02 00 00 00 00 00 00 00 00 07 07 0e  ................
+ 336  0e 4e 41 31 32 38 37 38 4e 41 31 32 38 37 38 01  .NA12878NA12878.
+ 352  02 02 00 01 00 00 00 00 00 00 00 00 00 00 00 00  ................
+ 368  00 00 00 00 00 00 00 01 01 02 02 02 00 00 00 00  ................
+ 384  00 00 00 01 00 00 00 00 00 00 00                 ...........
 ```

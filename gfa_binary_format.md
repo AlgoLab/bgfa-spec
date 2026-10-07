@@ -768,7 +768,8 @@ The `walks` layout is made by the following sequence of fields.
 | `walks_segments`     | The segment IDs of the walks, delta-encoded (see [Type Definitions](#type-definitions)) | `uints-delta` |
 | `walks_orientations` | The orientations of the walks                                                           | `bits`        |
 
-- All lengths of the walks are followed by all segment IDs of the walks, followed by all walks orientations.
+- All lengths of the walks are followed by all segment IDs of the walks (their absolute deltas, then their
+  trailing sign `bits` field), followed by all walks orientations.
 - The `walks_lengths` field contains exactly `record_num` integers. The i-th integer L(i) is the length of the i-th walk of the block. The sum of all L(i) equals `uncompressed_walk_len` in a Walks block and `uncompressed_paths_len` in a Paths block.
 - The `walks_segments` field contains a sequence of `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) integers. The first L(1) integers form the sequence of segment IDs of the first walk, then the subsequent L(2) integers form the sequence of the segment IDs of the second walk, etc.
 - The `walks_orientations` field contains a sequence of `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) bits. The first L(1) bits form the sequence of segment orientations of the first walk, then the subsequent L(2) bits form the sequence of the segment orientations of the second walk. Orientation `+` or `>` is encoded as `0`, while `-` or `<` is encoded as 1.

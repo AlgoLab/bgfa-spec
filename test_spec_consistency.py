@@ -135,3 +135,10 @@ def test_rule3_bits_fields_are_ordered_by_block_field_order():
     assert "in **block field order**" in rule3_norm
     assert "rank at that field's own position" in rule3_norm
     assert '"first" means first in that order' in rule3_norm
+
+
+def test_walks_byte_order_places_sign_bits_before_orientations():
+    assert (
+        "all segment IDs of the walks (their absolute deltas, then their trailing sign `bits` field), "
+        "followed by all walks orientations" in NORM_BINARY
+    )

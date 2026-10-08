@@ -103,11 +103,11 @@ def test_sign_bits_are_packed_bits_fields():
 def test_worked_examples_use_packed_sign_bits():
     assert "2 bytes of sign bits" not in NORM_BINARY
     assert "3 bytes of sign bits" not in NORM_BINARY
-    assert "| 224 | `00 00 00 00 00 00 00 00` | `walks_segments` sign bits (3 bits, all 0) |" in NORM_BINARY
-    assert "| 379 | `02 00 00 00 00 00 00 00` | `walks_segments` sign bits [0, 1], LSB-first `0x02` |" in NORM_BINARY
+    assert "| 222 | `00 00 00 00 00 00 00 00` | `walks_segments` sign bits (3 bits, all 0) |" in NORM_BINARY
+    assert "| 377 | `02 00 00 00 00 00 00 00` | `walks_segments` sign bits [0, 1], LSB-first `0x02` |" in NORM_BINARY
     assert "run-length bits" not in NORM_BINARY
     assert "372 bytes" not in NORM_BINARY
-    assert "395 bytes" in NORM_BINARY
+    assert "393 bytes" in NORM_BINARY
 
 
 def test_rule3_bits_fields_come_last():
@@ -137,11 +137,40 @@ def test_walks_block_layout_maps_payload_to_owner():
     assert "`start_positions` then `end_positions` → `compressed_positions_len`" in layout
 
 
-def test_end_positions_decision_recorded_as_kept():
-    assert "reserved for future use and stays in the wire format, including in version 1.0" in NORM_BINARY
-    assert "dead weight" not in NORM_BINARY
-    assert "reconsidered" not in NORM_BINARY
-    assert "accepted trade-off" in NORM_BINARY
+def test_walk_positions_are_zero_based_and_missing_only_as_a_pair():
+    assert "reserved for future use" not in NORM_BINARY
+    assert "1-based" not in NORM_BINARY
+    assert "the 0-based start coordinate of the walk" in NORM_BINARY
+    assert "the 0-based end coordinate of the walk" in NORM_BINARY
+    assert "`start_position = 0` and `end_position = 0` together mean that both coordinates are missing" in NORM_BINARY
+    assert "Exactly one missing coordinate cannot be represented" in NORM_BINARY
+    assert "| 355 | `07 02` | `end_positions` absolute deltas [7, 2] |" in NORM_BINARY
+    assert "W\tNA12878\t1\tscs\t1\t7\tscs-" in BINARY.split("### A.6 Round-trip")[1]
+
+
+def test_haplotype_index_is_zero_based():
+    assert "a **0-based** index of the haplotype" in NORM_BINARY
+    assert "`0` is not a valid haplotype index" not in NORM_BINARY
+
+
+def test_star_cigar_is_stored_as_empty_string():
+    assert "MUST translate a `*` CIGAR field into the empty string" in NORM_BINARY
+    a3 = section(BINARY, "### A.3 Links block", "### A.4 Paths block")
+    assert "2A 0A" not in a3
+    assert "| 151 | `0A 0A` |" in " ".join(a3.split())
+
+
+def test_cigar_ss_has_no_explicit_exclusions():
+    assert "CIGAR_STRING_CODES" not in BINARY
+    assert "column-oriented" not in NORM_ENCODING
+    assert "the CIGARs MUST be treated as strings" in NORM_ENCODING
+
+
+def test_only_gfa_1_2_is_referenced():
+    for text in (NORM_BINARY, NORM_ENCODING):
+        assert "GFA 1.1" not in text
+        assert "GFA 1.0" not in text
+    assert "from_iss" not in NORM_BINARY
 
 
 def test_rule3_bits_fields_are_ordered_by_block_field_order():
@@ -191,15 +220,15 @@ def _dump_bytes():
 
 def test_worked_example_hex_dump_is_consistent():
     data = _dump_bytes()
-    assert len(data) == 395
+    assert len(data) == 393
     assert data[:4] == b"BGFA"
     # The three region length fields that grew with packed sign bits:
     # compressed_paths_len (A.4), compressed_positions_len and
     # compressed_walk_len (A.5).
     twenty = (20).to_bytes(8, "little")
-    assert data[178:186] == twenty
-    assert data[300:308] == twenty
-    assert data[316:324] == twenty
+    assert data[176:184] == twenty
+    assert data[298:306] == twenty
+    assert data[314:322] == twenty
 
 
 def test_payload_table_rows_match_hex_dump():
@@ -280,8 +309,8 @@ def test_no_residual_contiguity_claims():
     assert "In byte order this is not contiguous" in NORM_ENCODING
     assert "the payload is the absolute values of the deltas followed by the sign `bits` field" not in NORM_BINARY
     assert "the following 8 bytes hold the two sign bits" not in NORM_BINARY
-    assert "the start-position magnitudes [1, 0] at 355" in NORM_BINARY
-    assert "the end-position magnitudes [0, 0] at 357" in NORM_BINARY
+    assert "the start-position magnitudes [1, 0] at 353" in NORM_BINARY
+    assert "the end-position magnitudes [7, 2] at 355" in NORM_BINARY
 
 
 def test_walks_lengths_sum_is_validated():
@@ -387,9 +416,10 @@ def test_appendix_arithmetic_model():
     assert "11 + 80 = 91" in NORM_BINARY
 
     # Region boundaries and total size, as stated in the appendix headings.
-    assert "A.4 Paths block (86 bytes, offsets 155-240)" in NORM_BINARY
-    assert "A.5 Walks block (154 bytes, offsets 241-394)" in NORM_BINARY
-    assert "395 bytes (17 + 82 + 56 + 86 + 154)" in NORM_BINARY
+    assert "A.3 Links block (54 bytes, offsets 99-152)" in NORM_BINARY
+    assert "A.4 Paths block (86 bytes, offsets 153-238)" in NORM_BINARY
+    assert "A.5 Walks block (154 bytes, offsets 239-392)" in NORM_BINARY
+    assert "393 bytes (17 + 82 + 54 + 86 + 154)" in NORM_BINARY
 
     # The appendix's own size decompositions agree with the model.
     assert (

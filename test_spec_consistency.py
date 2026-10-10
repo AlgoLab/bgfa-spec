@@ -148,6 +148,41 @@ def test_walk_positions_are_zero_based_and_missing_only_as_a_pair():
     assert "W\tNA12878\t1\tscs\t1\t7\tscs-" in BINARY.split("### A.6 Round-trip")[1]
 
 
+def test_end_positions_are_excluded_everywhere():
+    conv = section(NORM_BINARY, "**Positions, indices and intervals.**", "**Integer lists.**")
+    assert "**end position is excluded**" in conv
+    assert "exactly like a Python slice `s[start:end]`" in conv
+    assert "string `i` is `superstring[start[i]:end[i]]`" in NORM_ENCODING
+    assert "entry `i` is `blob[offsets[i]:offsets[i+1]]`" in NORM_ENCODING
+    assert "the walk covers `sequence[start_position:end_position]`" in NORM_BINARY
+    # Appendix byte ranges use the half-open notation, never inclusive a-b ranges.
+    assert not re.search(r"offsets \d+-\d+\)", BINARY)
+    # The superstring example in the spec obeys the slice rule.
+    sup, starts, ends = "ACGTTA", [0, 2, 4], [3, 5, 6]
+    assert [sup[s:e] for s, e in zip(starts, ends)] == ["ACG", "GTT", "TA"]
+    assert "`start = [0, 2, 4]` and `end = [3, 5, 6]`" in NORM_ENCODING
+
+
+def test_spec_defines_version_1():
+    assert "**BGFA version 1**" in NORM_BINARY
+    assert "version 0" not in NORM_BINARY.replace("Version `0`", "")
+    assert "Version 0" not in NORM_BINARY
+    assert "version 0" not in NORM_ENCODING
+    assert _dump_bytes()[4:6] == b"\x01\x00"
+
+
+def test_mandatory_non_empty_names():
+    assert "It is **mandatory and MUST NOT be empty**" in NORM_BINARY
+    assert "MAY be the empty string, meaning \"not set\"" not in NORM_BINARY
+    assert "a reader MUST treat an empty segment name" in NORM_BINARY
+    assert "MUST NOT write an empty segment name or an empty `sample_id`" in NORM_BINARY
+
+
+def test_unchecked_relations_are_explicit():
+    assert "a reader MUST NOT reject a walk because `end_position` exceeds the length" in NORM_BINARY
+    assert "a reader MUST NOT reject an entry because it does not hold one CIGAR per pair" in NORM_BINARY
+
+
 def test_haplotype_index_is_zero_based():
     assert "a **0-based** index of the haplotype" in NORM_BINARY
     assert "`0` is not a valid haplotype index" not in NORM_BINARY
@@ -416,9 +451,9 @@ def test_appendix_arithmetic_model():
     assert "11 + 80 = 91" in NORM_BINARY
 
     # Region boundaries and total size, as stated in the appendix headings.
-    assert "A.3 Links block (54 bytes, offsets 99-152)" in NORM_BINARY
-    assert "A.4 Paths block (86 bytes, offsets 153-238)" in NORM_BINARY
-    assert "A.5 Walks block (154 bytes, offsets 239-392)" in NORM_BINARY
+    assert "A.3 Links block (54 bytes, offsets [99, 153))" in NORM_BINARY
+    assert "A.4 Paths block (86 bytes, offsets [153, 239))" in NORM_BINARY
+    assert "A.5 Walks block (154 bytes, offsets [239, 393))" in NORM_BINARY
     assert "393 bytes (17 + 82 + 54 + 86 + 154)" in NORM_BINARY
 
     # The appendix's own size decompositions agree with the model.

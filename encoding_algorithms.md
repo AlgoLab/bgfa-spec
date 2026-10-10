@@ -52,7 +52,16 @@ file and MUST NOT continue, as detailed in [Reader Requirements](gfa_binary_form
 ### Superstring
 
 A set of strings is embedded within a single "superstring" constructed by a heuristic that tries to
-minimize the overall length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring. To recover string _i_, the decoder reads bytes from `start[i]` to `end[i]` (exclusive, following Python slice conventions).
+minimize the overall length (e.g., by overlapping common suffixes/prefixes). The metadata stores the start and end position of each string within the superstring.
+
+**End positions are excluded.** Positions are 0-based, `start[i]` is the first byte of string `i` and
+`end[i]` is the position **just after** its last byte, exactly like a Python slice: string `i` is
+`superstring[start[i]:end[i]]`, and its length is `end[i] - start[i]`. An empty string has
+`start[i] == end[i]`. See [Conventions](gfa_binary_format.md#conventions).
+
+**Example.** With the superstring `ACGTTA`, the strings `ACG`, `GTT` and `TA` are stored as
+`start = [0, 2, 4]` and `end = [3, 5, 6]`: `superstring[0:3]` is `ACG`, `superstring[2:5]` is `GTT` (it
+overlaps the first string), and `superstring[4:6]` is `TA`. The last `end` equals the superstring length.
 
 **Note: Strings are never concatenated directly; all string sets are encoded via this superstring approach.**
 
@@ -62,8 +71,6 @@ When encoding a list of strings (the `strings` type), the encoding strategy is s
 
 - First byte: integer encoding strategy for the position metadata
 - Second byte: string encoding strategy for the superstring blob
-
-The start and end positions are 0-based, the final position is excluded from the substring, following Python slice conventions.
 
 Decoding a set of strings does not need to know the heuristic used to compute the superstring.
 
@@ -514,12 +521,16 @@ In every case `0x04` splits each byte of the buffer into a high and a low nibble
 still a byte buffer for the purposes of this method. For `0x04` a reader MUST treat an odd `symbol_count` as
 a fatal error.
 
-**Deriving the bitstream length.** After decoding the `symbol_count` varint, the bitstream occupies the rest
-of the method data, i.e. `blob length - 2 - codebook_len - (bytes of the symbol_count varint)` bytes, where
-`blob length` is the method-data byte count read by [Blob Framing](#blob-framing). A reader
-MUST reject the field as a fatal error if `blob length` is smaller than that sum, if the bitstream ends before
-`symbol_count` symbols have been decoded, or if the bitstream is longer than `ceil(B / 8)` bytes, where `B`
-is the number of bits consumed by the `symbol_count` symbols.
+**Deriving the bitstream length.** Let `B` be the number of bits consumed by decoding the `symbol_count`
+symbols. The bitstream is exactly `ceil(B / 8)` bytes long; the last `8 * ceil(B / 8) - B` bits are padding.
+When this method data is the whole method data of a field (a `strings` blob or a CIGAR buffer), the bitstream
+also occupies all the rest of it, i.e. `M - 2 - codebook_len - (bytes of the symbol_count varint)` bytes,
+where `M` is the method-data byte count (the blob length of [Blob Framing](#blob-framing), or the rest of the
+field for the packed operations of a CIGAR `numOperations` decomposition). Inside
+[BWT + Huffman](#bwt--huffman-0x09) the Huffman data of a block is followed by the next block, and only the
+`ceil(B / 8)` rule applies. A reader MUST reject the field as a fatal error if the available bytes run out
+before `symbol_count` symbols have been decoded, or if, in the first case, any byte is left after the
+`ceil(B / 8)` bytes of the bitstream.
 
 **Codebook format:**
 The codebook is exactly 32 bytes for `0x04` (16 little-endian uint16 values, one bit-length per nibble
@@ -699,7 +710,7 @@ of `0x00`, no `packed_bases` bytes, and no exception table, i.e. 2 bytes of meth
 
 ### Reserved: Arithmetic Coding (`0x06`)
 
-Code `0x06` is **reserved and MUST NOT be used** in BGFA version 0. An earlier draft assigned it to a
+Code `0x06` is **reserved and MUST NOT be used** in BGFA version 1. An earlier draft assigned it to a
 byte-oriented arithmetic coder, but the required byte-exact details (register initialisation, the
 renormalisation trigger, carry propagation into the pending count, and the final flush) were never pinned
 down, and arithmetic coders are bit-incompatible at that level. Two conforming implementations would have
@@ -765,7 +776,7 @@ block may be shorter. Each block is encoded independently by this pipeline:
 1. **BWT.** Consider the `n` cyclic rotations of the block, where rotation `j` starts at byte `j`. Sort
    them lexicographically, comparing bytes as unsigned values. The BWT output is the last column of the
    sorted rotation matrix: `n` bytes, the `r`-th being the last byte of the `r`-th sorted rotation. The
-   **primary index** is the row of the sorted matrix that holds rotation 0 (the block itself). When the
+   **primary index** is the 0-based row of the sorted matrix that holds rotation 0 (the block itself). When the
    block is periodic, several rows hold rotation-equal strings; any of those rows is a valid primary index,
    since they all invert to the same block.
 2. **MTF.** Apply the Move-to-Front transform to the BWT output. The MTF list is initialised to the 256 byte
@@ -816,8 +827,8 @@ integer encoding used for the integer lists of this layout.
 
 - `uint16`: dictionary size `N` (number of unique strings), little-endian
 - `uints` list: dictionary entry offsets (`N + 1` values)
-  - Offsets are cumulative from the start of the dictionary blob, so entry `i` is the bytes
-    `[offsets[i], offsets[i+1])`
+  - Offsets are cumulative from the start of the dictionary blob, and each end is excluded: entry `i` is
+    `blob[offsets[i]:offsets[i+1]]`, of length `offsets[i+1] - offsets[i]`
   - `offsets[N]` equals the total length of the dictionary blob
   - Offsets are encoded using the integer encoding strategy given by the first byte of the 2-byte compression
     code `0xHH0A`

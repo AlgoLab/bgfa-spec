@@ -1,6 +1,6 @@
 # Binary GFA format
 
-This document specifies **BGFA version 0**, a binary encoding of [GFA 1.2](https://github.com/GFA-spec/GFA-spec/blob/master/GFA1.md).
+This document specifies **BGFA version 1**, a binary encoding of [GFA 1.2](https://github.com/GFA-spec/GFA-spec/blob/master/GFA1.md).
 The only supported source format is GFA 1.2; every reference to GFA in this document means GFA 1.2. The
 encoding algorithms referenced below are specified in [encoding_algorithms.md](encoding_algorithms.md), which
 is part of this specification.
@@ -41,13 +41,13 @@ is part of this specification.
 - [Walks and Paths: Type Note](#walks-and-paths-type-note)
 - [Packed Bits](#packed-bits)
 - [Conformance Requirements](#conformance-requirements)
-- [Known Limitations of Version 0](#known-limitations-of-version-0)
+- [Known Limitations of Version 1](#known-limitations-of-version-1)
 - [Appendix A: Example BGFA File](#appendix-a-example-bgfa-file)
-  - [A.1 File header](#a1-file-header-17-bytes-offsets-0-16)
-  - [A.2 Segments block](#a2-segments-block-82-bytes-offsets-17-98)
-  - [A.3 Links block](#a3-links-block-56-bytes-offsets-99-154)
-  - [A.4 Paths block](#a4-paths-block-86-bytes-offsets-155-240)
-  - [A.5 Walks block](#a5-walks-block-154-bytes-offsets-241-394)
+  - [A.1 File header](#a1-file-header-17-bytes-offsets-0-17)
+  - [A.2 Segments block](#a2-segments-block-82-bytes-offsets-17-99)
+  - [A.3 Links block](#a3-links-block-54-bytes-offsets-99-153)
+  - [A.4 Paths block](#a4-paths-block-86-bytes-offsets-153-239)
+  - [A.5 Walks block](#a5-walks-block-154-bytes-offsets-239-393)
   - [A.6 Round-trip](#a6-round-trip)
 
 ## Binary GFA file: overall structure
@@ -119,133 +119,6 @@ For implementation details of each encoding method, see [encoding_algorithms.md]
 
 **Key principle:** Every `compressed_*_len` field in the header tells you exactly how many bytes to read for its corresponding payload field. The reader sums these to find the total payload boundary, then processes each field sequentially within the payload.
 
-### Payload Byte Layouts
-
-The `compressed_*_len` fields are the only framing information in a block: the payload is the concatenation of
-the byte ranges they describe, in the order listed in each block's _Payload_ table. The tables below state, for
-every block, which header field owns which payload fields and how the size of each part is derived.
-
-**Links block**
-
-| `compressed_*_len` field      | Contains (in order)                                        |
-| ----------------------------- | ---------------------------------------------------------- |
-| `compressed_fromto_len`       | `from_ids`, `to_ids`, `from_orientation`, `to_orientation` |
-| `compressed_links_cigars_len` | `links_cigar_strings`                                      |
-
-**Paths block**
-
-| `compressed_*_len` field      | Contains (in order)    |
-| ----------------------------- | ---------------------- |
-| `compressed_path_names_len`   | `path_names`           |
-| `compressed_paths_len`        | `paths` (`walks` type) |
-| `compressed_paths_cigars_len` | `paths_cigar_strings`  |
-
-**Walks block**
-
-| `compressed_*_len` field    | Contains (in order)                |
-| --------------------------- | ---------------------------------- |
-| `compressed_sample_ids_len` | `sample_ids`                       |
-| `compressed_haplotype_len`  | `haplotype_indices`                |
-| `compressed_sequence_len`   | `sequence_ids`                     |
-| `compressed_positions_len`  | `start_positions`, `end_positions` |
-| `compressed_walk_len`       | `walks` (`walks` type)             |
-
-**Segments block**
-
-| `compressed_*_len` field       | Contains (in order) |
-| ------------------------------ | ------------------- |
-| `compressed_segment_names_len` | `segment_names`     |
-| `compressed_segment_label_len` | `sequences`         |
-
-**Note on `uints-delta` fields.** A `uints-delta` field is not contiguous: its absolute values are stored
-inline at the field's position, while its sign `bits` field is deferred to the trailing `bits`-fields group
-of the owning `compressed_*_len` field (rule 3). The "Contains (in order)" tables above list such a field
-once, at the position of its absolute values.
-
-**Size rules.** The size of each part follows from these rules, evaluated in this order:
-
-1. **Fixed-size integer fields.** A list encoded with `fixed16`, `fixed32`, or `fixed64` has size
-   `n * 2`, `n * 4`, or `n * 8`, where `n` is the number of integers implied by the header
-   (`record_num`; `record_num` for **each** of the Walks `start_positions` and `end_positions`
-   sub-fields, which have the independent strategies `compression_positions_start` and
-   `compression_positions_end`; or `uncompressed_walk_len` for the `walks_segments` absolute values).
-   For a `uints-delta` field this fixed-width size applies to the absolute values of the deltas; the
-   sign bits are a separate `bits` field covered by rule 3.
-2. **Self-delimiting integer fields.** A list encoded with `varint`, `Elias gamma`, `Elias omega`,
-   `Golomb`, `Rice`, `StreamVByte`, or `VByte` MUST be decoded for exactly the number of integers
-   implied by the header, and MUST consume no more bytes than remain in its owning `compressed_*_len`
-   field. Decoding stops at the count, not at the end of the range. (`none` is not a valid integer
-   strategy: `0x00` is excluded from integer positions — see
-   [Integer Encoding Methods](#integer-encoding-methods).)
-3. **`bits` fields.** A `bits` field always occupies `8 * ceil(n / 64)` bytes, where `n` is the number of
-   bits (see [Packed Bits](#packed-bits)). A `bits` field is never followed by a non-`bits` field: the
-   `bits` fields come at the end of their owning `compressed_*_len` field. When an owning field contains
-   more than one `bits` field, they appear in the trailing group in **block field order** — the order in
-   which the fields are listed for that block, and for a field whose type expands into sub-fields (the
-   `walks` type) the order in that type's layout section (see [Walks Type Format](#walks-type-format)) —
-   and a `uints-delta` field's sign bits rank at that field's own position in that order. The start
-   offset of the first `bits` field is `compressed_*_len` minus the total byte size of all `bits` fields
-   it owns (e.g. `16 * ceil(record_num / 64)` for the Links block's
-   `from_orientation` and `to_orientation`); "first" means first in that order.
-4. **Blobs.** A `strings` field is `metadata` + `blob`, and the blob carries a leading `varint` blob length, so
-   the blob is self-delimiting (see [Blob Framing](encoding_algorithms.md#blob-framing)). The blob length is
-   **always a byte count**. The single exception is the Dictionary method (`0x0A`), which replaces this layout
-   entirely, including the metadata and the blob length: see
-   [Dictionary Encoding](encoding_algorithms.md#dictionary-encoding-0x0a).
-5. **`cigar strings` fields.** For decomposition `0x00` the payload is the `record_num` CIGAR entries, each
-   followed by `\n`, so splitting on `\n` and dropping the trailing empty piece yields exactly `record_num`
-   entries. Decomposition `0x02` is the same buffer, compressed as one blob with a leading `varint` blob
-   length. Decomposition `0x01` starts with a `varint` cigar count, followed by two self-delimiting integer
-   lists, and its packed operations occupy the rest of the field. See
-   [CIGAR 4-byte Strategy Code Details](encoding_algorithms.md#cigar-4-byte-strategy-code-details).
-6. **No padding.** Fields are packed contiguously with no inter-field padding and no alignment padding.
-7. **Exact consumption.** Decoding the fields that a `compressed_*_len` field owns MUST consume exactly
-   `compressed_*_len` bytes. A reader MUST treat any byte left over at the end of the region, and any read
-   past its end, as a fatal error.
-
-#### Limits and Validation
-
-Every size and count used to frame a block comes from the block header or from the payload, and is therefore
-attacker-controlled. A reader MUST treat all of them as untrusted input.
-
-A reader MUST perform the following checks, **in this order and before allocating any buffer**:
-
-1. **Header sanity.** `section_id` is known; `record_num` is not zero (writers MUST NOT write empty blocks); every strategy code byte is valid and every
-   reserved byte is `0x00`.
-2. **File extent.** The sum of all `compressed_*_len` fields, plus the block header size implied by
-   `section_id`, MUST fit within the remaining bytes of the file. A truncated file is a fatal error.
-3. **Derived sizes against their owner.** Every derived size MUST be checked against the
-   `compressed_*_len` field that owns it, and MUST be less than or equal to it. In particular,
-   `compressed_fromto_len - 16 * ceil(record_num / 64)` MUST NOT be computed without first checking that
-   `compressed_fromto_len >= 16 * ceil(record_num / 64)`, because the subtraction underflows otherwise.
-4. **Decoded-size caps.** The total number of bytes a reader is willing to decode from one block MUST be
-   bounded by an implementation-defined limit. A block whose decoded content would exceed that limit MUST be
-   rejected as a fatal error, rather than causing the reader to attempt the allocation. This bound also applies
-   to any state a reader retains across blocks, such as the segment ID table needed to resolve segment IDs to
-   names: see [Segments Block](#segments-block). The limit is implementation-defined, so two conformant
-   readers may disagree on a given file; a reader SHOULD document its limit, and divergence at the boundary
-   is explicitly permitted.
-5. **Value widths.** A value that does not fit the width implied by its integer strategy MUST be rejected, not
-   truncated: see [Integer Validation Rules](encoding_algorithms.md#integer-validation-rules).
-6. **Arithmetic overflow.** Products, sums and roundings derived from header fields — `n * 2`, `n * 4`,
-   `n * 8`, `8 * ceil(n / 64)`, `ceil(n / 4)`, `16 * ceil(n / 64)`, and dictionary `N + 1` — MUST be computed
-   with overflow checking. On overflow the reader MUST reject the field; it MUST NOT wrap around.
-7. **Per-method validation.** Each method additionally carries its own MUST-level validation rules, such as
-   Kraft's equality for a Huffman codebook and the position and count checks for 2-bit DNA exceptions. See
-   [encoding_algorithms.md](encoding_algorithms.md).
-8. **Uncompressed lengths.** Every `uncompressed_*_len` field is redundant with the decoded data, and a
-   reader MUST check it once the field is decoded: a mismatch is a fatal error. The expected values are
-   stated with each header field; in particular `uncompressed_haplotype_len` and `uncompressed_sequence_len`
-   MUST equal `record_num`, and `uncompressed_positions_len` MUST equal `2 * record_num`.
-
-A reader MUST NOT trust the superstring heuristic: for every string `i`, `start[i] <= end[i]` MUST hold and
-`end[i]` MUST NOT exceed the decoded superstring length. Any violation is a fatal error.
-
-**Example.** In the Links block, `from_orientation` has `record_num` bits, hence `8 * ceil(record_num / 64)`
-bytes, and `to_orientation` the same. The two bit fields therefore occupy `16 * ceil(record_num / 64)`
-bytes, and `from_ids` and `to_ids` together occupy `compressed_fromto_len - 16 * ceil(record_num / 64)`
-bytes.
-
 ## File Header Section
 
 | Field          | Description                                             | Type                      |
@@ -266,18 +139,20 @@ several `H` lines is not preserved.
 
 **Note:** The magic number 0x41464742 corresponds to ASCII "BGFA" when read as little-endian bytes: 0x42='B', 0x47='G', 0x46='F', 0x41='A'.
 
-**Version:** The version field is a progressive integer starting at 0; this document defines version `0`. A
-reader MUST reject the file with a fatal error if `version` is **larger** than the highest version it
-supports. A reader that supports version `v` MUST accept every version `<= v`, decoding each file according
-to the specification of its own version.
+**Version:** The version field is a progressive integer; this document defines version `1`, and a writer
+conforming to it MUST write `version = 1`. Version `0` identifies pre-release drafts of this format, whose
+layout is not defined by any published specification: a reader MUST treat `version = 0` as a fatal error. A
+reader MUST also reject the file with a fatal error if `version` is **larger** than the highest version it
+supports. A reader that supports a later version `v` MUST accept every published version from `1` to `v`,
+decoding each file according to the specification of its own version.
 
 ## Segments Block
 
 We associate an internal segment ID to each segment name, where the segment ID is an
 incrementing integer starting at 0. Segment IDs are assigned in the order segment names appear in the file.
 
-Segment IDs are **global to the file**: the segment with ID `i` is the `i`-th segment record in file order,
-across all Segments blocks. A record in any block MAY reference any segment ID in the file, including one
+Segment IDs are **global to the file**: the segment with ID `i` is the `i`-th (0-based) segment record in file
+order, across all Segments blocks. A record in any block MAY reference any segment ID in the file, including one
 defined in a block that appears later in the file; readers MUST NOT assume that referenced segments are
 already defined.
 
@@ -307,6 +182,12 @@ type, and how writers split records across blocks. Segment ID numbering continue
 **Segment names are unique.** As in GFA 1.2, no two segment records in a file may have the same name. A
 writer MUST NOT write duplicate segment names, and a reader that builds the name table MUST treat a
 duplicate as a fatal error.
+
+**Segment names are non-empty.** Every segment name MUST hold at least one byte. A writer MUST NOT write an
+empty segment name, and a reader MUST treat an empty segment name (`start[i] == end[i]` in `segment_names`,
+or an empty dictionary entry referenced by `segment_names`) as a fatal error. This check needs only the
+decoded `segment_names` field of the block, so every reader performs it, including one that never resolves
+segment IDs. Segment _sequences_, unlike names, may be empty (see below).
 
 ### Header
 
@@ -430,6 +311,9 @@ its number of oriented segment occurrences, i.e. its number of elements in the `
 within a single entry (the GFA convention). A path whose `Overlaps` field is `*` has the empty string as its
 entry. A single `,`-separated entry MUST NOT be split across several entries.
 
+The number of CIGARs in an entry is **not** checked against the number of segments of the path: a reader
+MUST NOT reject an entry because it does not hold one CIGAR per pair of consecutive segments.
+
 ## Walks Block
 
 Each block consists of a header and a payload.
@@ -489,8 +373,9 @@ haplotype indices, followed by `record_num` sequence IDs, followed by `record_nu
 
 **Semantics of the record fields:**
 
-- `sample_id`: the sample name. It MAY be the empty string, meaning "not set", or the literal `*`, meaning
-  "unspecified sample".
+- `sample_id`: the `SampleId` column of the GFA `W` line, stored verbatim. It is **mandatory and MUST NOT be
+  empty**: a writer MUST NOT write an empty `sample_id`, and a reader MUST treat an empty `sample_id` as a
+  fatal error. The literal `*` is a valid, non-empty value and is stored as is.
 - `haplotype_index`: the `HapIndex` column of the GFA `W` line, a **0-based** index of the haplotype within
   the sample. Every value, `0` included, is valid.
 - `sequence_id`: **the segment ID of the sequence the walk is placed on.** It is an internal segment ID in the
@@ -502,9 +387,11 @@ haplotype indices, followed by `record_num` sequence IDs, followed by `record_nu
   reader recovers the name by looking the ID up in the Segments blocks, which is the only mapping this
   format defines.
 - `start_position`: the `SeqStart` column of the GFA `W` line, the 0-based start coordinate of the walk on
-  `sequence_id` (inclusive).
+  `sequence_id`. It is **included** in the walk.
 - `end_position`: the `SeqEnd` column of the GFA `W` line, the 0-based end coordinate of the walk on
-  `sequence_id` (exclusive).
+  `sequence_id`. It is **excluded** from the walk, like the end of a Python slice: the walk covers
+  `sequence[start_position:end_position]`, i.e. `end_position - start_position` bases, and the last covered
+  base is at `end_position - 1`. See [Conventions](#conventions).
 
 **Missing positions.** In GFA either coordinate may be `*`. BGFA represents missing coordinates only as a
 **pair**:
@@ -514,11 +401,148 @@ haplotype indices, followed by `record_num` sequence IDs, followed by `record_nu
   never a real placement, so this pair is unambiguous.
 - Exactly one missing coordinate cannot be represented. A writer MUST NOT encode a `W` line in which exactly
   one of `SeqStart` and `SeqEnd` is `*`, and MUST report an error for it instead.
-- Every other pair is a real placement, and a reader MUST treat `start_position > end_position` as a fatal
-  error. In particular `start_position = 0` with `end_position > 0` is a valid walk that starts at the
-  beginning of the sequence.
+- Every other pair is a real placement, which covers at least one base, so `start_position < end_position`
+  MUST hold. A reader MUST treat `start_position >= end_position` as a fatal error, except for the pair
+  `(0, 0)`, and a writer MUST report an error for a `W` line whose `SeqStart` is not smaller than its `SeqEnd`.
+  In particular `start_position = 0` with `end_position > 0` is a valid walk that starts at the beginning of
+  the sequence.
+- The positions are **not** checked against the sequence they refer to: a reader MUST NOT reject a walk
+  because `end_position` exceeds the length of the sequence of segment `sequence_id`, or because that
+  segment has an empty sequence.
 
 ## Conventions
+
+### Payload Byte Layouts
+
+The `compressed_*_len` fields are the only framing information in a block: the payload is the concatenation of
+the byte ranges they describe, in the order listed in each block's _Payload_ table. The tables below state, for
+every block, which header field owns which payload fields and how the size of each part is derived.
+
+**Links block**
+
+| `compressed_*_len` field      | Contains (in order)                                        |
+| ----------------------------- | ---------------------------------------------------------- |
+| `compressed_fromto_len`       | `from_ids`, `to_ids`, `from_orientation`, `to_orientation` |
+| `compressed_links_cigars_len` | `links_cigar_strings`                                      |
+
+**Paths block**
+
+| `compressed_*_len` field      | Contains (in order)    |
+| ----------------------------- | ---------------------- |
+| `compressed_path_names_len`   | `path_names`           |
+| `compressed_paths_len`        | `paths` (`walks` type) |
+| `compressed_paths_cigars_len` | `paths_cigar_strings`  |
+
+**Walks block**
+
+| `compressed_*_len` field    | Contains (in order)                |
+| --------------------------- | ---------------------------------- |
+| `compressed_sample_ids_len` | `sample_ids`                       |
+| `compressed_haplotype_len`  | `haplotype_indices`                |
+| `compressed_sequence_len`   | `sequence_ids`                     |
+| `compressed_positions_len`  | `start_positions`, `end_positions` |
+| `compressed_walk_len`       | `walks` (`walks` type)             |
+
+**Segments block**
+
+| `compressed_*_len` field       | Contains (in order) |
+| ------------------------------ | ------------------- |
+| `compressed_segment_names_len` | `segment_names`     |
+| `compressed_segment_label_len` | `sequences`         |
+
+**Note on `uints-delta` fields.** A `uints-delta` field is not contiguous: its absolute values are stored
+inline at the field's position, while its sign `bits` field is deferred to the trailing `bits`-fields group
+of the owning `compressed_*_len` field (rule 3). The "Contains (in order)" tables above list such a field
+once, at the position of its absolute values.
+
+**Size rules.** The size of each part follows from these rules, evaluated in this order:
+
+1. **Fixed-size integer fields.** A list encoded with `fixed16`, `fixed32`, or `fixed64` has size
+   `n * 2`, `n * 4`, or `n * 8`, where `n` is the number of integers implied by the header
+   (`record_num`; `record_num` for **each** of the Walks `start_positions` and `end_positions`
+   sub-fields, which have the independent strategies `compression_positions_start` and
+   `compression_positions_end`; or `uncompressed_walk_len` for the `walks_segments` absolute values).
+   For a `uints-delta` field this fixed-width size applies to the absolute values of the deltas; the
+   sign bits are a separate `bits` field covered by rule 3.
+2. **Self-delimiting integer fields.** A list encoded with `varint`, `Elias gamma`, `Elias omega`,
+   `Golomb`, `Rice`, `StreamVByte`, or `VByte` MUST be decoded for exactly the number of integers
+   implied by the header, and MUST consume no more bytes than remain in its owning `compressed_*_len`
+   field. Decoding stops at the count, not at the end of the range. (`none` is not a valid integer
+   strategy: `0x00` is excluded from integer positions — see
+   [Integer Encoding Methods](#integer-encoding-methods).)
+3. **`bits` fields.** A `bits` field always occupies `8 * ceil(n / 64)` bytes, where `n` is the number of
+   bits (see [Packed Bits](#packed-bits)). A `bits` field is never followed by a non-`bits` field: the
+   `bits` fields come at the end of their owning `compressed_*_len` field. When an owning field contains
+   more than one `bits` field, they appear in the trailing group in **block field order** — the order in
+   which the fields are listed for that block, and for a field whose type expands into sub-fields (the
+   `walks` type) the order in that type's layout section (see [Walks Type Format](#walks-type-format)) —
+   and a `uints-delta` field's sign bits rank at that field's own position in that order. The start
+   offset of the first `bits` field is `compressed_*_len` minus the total byte size of all `bits` fields
+   it owns (e.g. `16 * ceil(record_num / 64)` for the Links block's
+   `from_orientation` and `to_orientation`); "first" means first in that order.
+4. **Blobs.** A `strings` field is `metadata` + `blob`, and the blob carries a leading `varint` blob length, so
+   the blob is self-delimiting (see [Blob Framing](encoding_algorithms.md#blob-framing)). The blob length is
+   **always a byte count**. The single exception is the Dictionary method (`0x0A`), which replaces this layout
+   entirely, including the metadata and the blob length: see
+   [Dictionary Encoding](encoding_algorithms.md#dictionary-encoding-0x0a).
+5. **`cigar strings` fields.** For decomposition `0x00` the payload is the `record_num` CIGAR entries, each
+   followed by `\n`, so splitting on `\n` and dropping the trailing empty piece yields exactly `record_num`
+   entries. Decomposition `0x02` is the same buffer, compressed as one blob with a leading `varint` blob
+   length. Decomposition `0x01` starts with a `varint` cigar count, followed by two self-delimiting integer
+   lists, and its packed operations occupy the rest of the field. See
+   [CIGAR 4-byte Strategy Code Details](encoding_algorithms.md#cigar-4-byte-strategy-code-details).
+6. **No padding.** Fields are packed contiguously with no inter-field padding and no alignment padding.
+7. **Exact consumption.** Decoding the fields that a `compressed_*_len` field owns MUST consume exactly
+   `compressed_*_len` bytes. A reader MUST treat any byte left over at the end of the region, and any read
+   past its end, as a fatal error.
+
+#### Limits and Validation
+
+Every size and count used to frame a block comes from the block header or from the payload, and is therefore
+attacker-controlled. A reader MUST treat all of them as untrusted input.
+
+A reader MUST perform checks 1–7 below **in this order and before allocating any buffer** that they bound.
+Check 8 can only run once a field is decoded, and MUST run then:
+
+1. **Header sanity.** `section_id` is known; `record_num` is not zero (writers MUST NOT write empty blocks); every strategy code byte is valid and every
+   reserved byte is `0x00`.
+2. **File extent.** The sum of all `compressed_*_len` fields, plus the block header size implied by
+   `section_id`, MUST fit within the remaining bytes of the file. A truncated file is a fatal error.
+3. **Derived sizes against their owner.** Every derived size MUST be checked against the
+   `compressed_*_len` field that owns it, and MUST be less than or equal to it. In particular,
+   `compressed_fromto_len - 16 * ceil(record_num / 64)` MUST NOT be computed without first checking that
+   `compressed_fromto_len >= 16 * ceil(record_num / 64)`, because the subtraction underflows otherwise.
+4. **Decoded-size caps.** The total number of bytes a reader is willing to decode from one block MUST be
+   bounded by an implementation-defined limit. A block whose decoded content would exceed that limit MUST be
+   rejected as a fatal error, rather than causing the reader to attempt the allocation. This bound also applies
+   to any state a reader retains across blocks, such as the segment ID table needed to resolve segment IDs to
+   names: see [Segments Block](#segments-block). The limit is implementation-defined, so two conformant
+   readers may disagree on a given file; a reader SHOULD document its limit, and divergence at the boundary
+   is explicitly permitted.
+5. **Value range.** A decoded integer of `2^64` or more MUST be rejected, never truncated or wrapped: see the
+   integer range in [Conventions](#conventions) and
+   [Integer Validation Rules](encoding_algorithms.md#integer-validation-rules).
+6. **Arithmetic overflow.** Products, sums and roundings derived from header fields — `n * 2`, `n * 4`,
+   `n * 8`, `8 * ceil(n / 64)`, `ceil(n / 4)`, `16 * ceil(n / 64)`, and dictionary `N + 1` — MUST be computed
+   with overflow checking. On overflow the reader MUST reject the field; it MUST NOT wrap around.
+7. **Per-method validation.** Each method additionally carries its own MUST-level validation rules, such as
+   Kraft's equality for a Huffman codebook and the position and count checks for 2-bit DNA exceptions. See
+   [encoding_algorithms.md](encoding_algorithms.md).
+8. **Uncompressed lengths.** Every `uncompressed_*_len` field is redundant with the decoded data, and a
+   reader MUST check it once the field is decoded: a mismatch is a fatal error. The expected values are
+   stated with each header field. For a `strings` field it is the sum of the string lengths,
+   `sum(end[i] - start[i])` (equivalently, the sum of the dictionary entry lengths of the strings, for
+   Dictionary); for a `cigar strings` field it is the sum of the byte lengths of the stored entries; in
+   particular `uncompressed_haplotype_len` and `uncompressed_sequence_len`
+   MUST equal `record_num`, and `uncompressed_positions_len` MUST equal `2 * record_num`.
+
+A reader MUST NOT trust the superstring heuristic: for every string `i`, `start[i] <= end[i]` MUST hold and
+`end[i]` MUST NOT exceed the decoded superstring length. Any violation is a fatal error.
+
+**Example.** In the Links block, `from_orientation` has `record_num` bits, hence `8 * ceil(record_num / 64)`
+bytes, and `to_orientation` the same. The two bit fields therefore occupy `16 * ceil(record_num / 64)`
+bytes, and `from_ids` and `to_ids` together occupy `compressed_fromto_len - 16 * ceil(record_num / 64)`
+bytes.
 
 **Block ordering constraints:**
 
@@ -530,6 +554,23 @@ haplotype indices, followed by `record_num` sequence IDs, followed by `record_nu
 **Alignment:** All fields begin at the next byte boundary after the previous field, and no inter-field padding
 is applied. `bits` fields are the one exception to byte-granularity: they occupy a whole number of 8-byte
 `uint64` words and are therefore padded up to that size. See [Packed Bits](#packed-bits).
+
+**Positions, indices and intervals.** Every position and index in BGFA is **0-based**, and every interval is
+**half-open**: its start position is included and its **end position is excluded**, exactly like a Python
+slice `s[start:end]`. The interval `[start, end)` therefore holds `end - start` elements, it is empty when
+`start == end`, and `start <= end` always holds. This rule has no exception; it applies to:
+
+- the `start` and `end` positions of a `strings` field: string `i` is `superstring[start[i]:end[i]]`;
+- the Dictionary offsets: entry `i` is `blob[offsets[i]:offsets[i+1]]`;
+- the Walks `start_position` and `end_position`: the walk covers `sequence[start_position:end_position]`;
+- the byte ranges written as `[a, b)` in this document, such as the offsets in
+  [Appendix A](#appendix-a-example-bgfa-file): bytes `a` to `b - 1`.
+
+Where this document writes "the `i`-th" element, `i` is 0-based unless it says otherwise.
+
+The notation `a..b` (as in `1..31` or `0x9..0xE`) is used only for **ranges of allowed values**, never for
+positions, and it includes both `a` and `b`. Positions and byte ranges are always written `[a, b)` or as a
+slice `s[a:b]`.
 
 **Integer lists.** Every list of integers named by this specification is encoded as an **independent unit**
 with its integer strategy, and is the "list" that every integer method in
@@ -712,7 +753,7 @@ Used for the second byte of a 2-byte `strings` code and for `SS` in a
 | `0x0A` | Dictionary           | [replaces the superstring layout](encoding_algorithms.md#dictionary-encoding-0x0a)                      |
 | `0xF4` | Huffman (byte-level) | 256-symbol codebook, same wire format as `0x04`                                                         |
 
-`0x06` is reserved (see the table above) and MUST be treated as an unknown strategy code by readers in version 0. All of `0x0B`–`0x0F`, `0x10`–`0xF3` and `0xF5`–`0xFF` are likewise not assigned and MUST be treated as
+`0x06` is reserved (see the table above) and MUST be treated as an unknown strategy code by readers in version 1. All of `0x0B`–`0x0F`, `0x10`–`0xF3` and `0xF5`–`0xFF` are likewise not assigned and MUST be treated as
 unknown strategy codes. `0x04` and `0xF4` share one wire format and differ only in alphabet size: see
 [Huffman Coding](encoding_algorithms.md#huffman-coding-0x04-0xf4).
 
@@ -911,13 +952,13 @@ neighbouring field.
 - Orientations `[1, 0, 1, 1, 0, ...]` with `n = 64`: bit 0 = 1, bit 1 = 0, bit 2 = 1, bit 3 = 1, bit 4 = 0, so
   word 0 = `0x000000000000000D` (low byte `0b00001101`), stored little-endian as
   `0D 00 00 00 00 00 00 00`. 8 bytes.
-- Orientations with `n = 155`: `8 * ceil(155 / 64)` = `8 * 3` = **24 bytes**, not 20. Bits 0..154 are stored and
-  bits 155..191 of the last word are padding.
+- Orientations with `n = 155`: `8 * ceil(155 / 64)` = `8 * 3` = **24 bytes**, not 20. The bits with index in
+  `[0, 155)` are stored, and the bits with index in `[155, 192)` of the last word are padding.
 - `n = 0`: 0 bytes. A `bits` field with no bits still occupies no space.
 
 ## Conformance Requirements
 
-**Minimum reader requirements:** A compliant version 0 reader MUST at minimum support:
+**Minimum reader requirements:** A compliant version 1 reader MUST at minimum support:
 
 - the integer methods `varint` (`0x01`), `fixed16` (`0x02`), `fixed32` (`0x0A`) and `fixed64` (`0x0B`);
 - the string methods `none` (`0x00`), `zstd` (`0x01`) and `gzip` (`0x02`);
@@ -936,6 +977,7 @@ which includes the reserved code `0x06`.
 - MUST NOT encode a `W` line in which exactly one of `SeqStart` and `SeqEnd` is `*`
 - MUST set reserved fields to 0
 - MUST NOT write empty blocks (blocks with `record_num = 0`). If a block type has no records, omit the block entirely.
+- MUST NOT write an empty segment name or an empty `sample_id`
 - MUST NOT write segment IDs that are not defined by some Segments block in the same file
 - MUST NOT write a Walks `sequence_id` that is not defined by some Segments block in the same file. A
   writer converting a GFA file whose `W` record names a sequence that is not present as a segment name in
@@ -953,9 +995,9 @@ which includes the reserved code `0x06`.
   that does not resolve IDs at all is not required to perform the check, as set out in
   [Segments Block](#segments-block).
 
-## Known Limitations of Version 0
+## Known Limitations of Version 1
 
-The following information present in GFA is **not representable** in BGFA version 0. Writers MUST drop it and
+The following information present in GFA is **not representable** in BGFA version 1. Writers MUST drop it and
 readers MUST NOT expect it:
 
 - **Tags.** All optional tags of `S`, `L`, `P` and `W` lines are dropped, including `LN`, `RC`, `FC`, `KC`,
@@ -971,7 +1013,7 @@ readers MUST NOT expect it:
 - **Exactly one missing walk coordinate.** A `W` line whose `SeqStart` or `SeqEnd` (but not both) is `*` has
   no representation. See [Walks Block](#walks-block).
 - **Walk sequence names.** A Walks `sequence_id` is an internal segment ID, not a sequence name, and BGFA
-  version 0 defines no Sequence block at all: section ID 1 is not defined and MUST be treated as a fatal
+  version 1 defines no Sequence block at all: section ID 1 is not defined and MUST be treated as a fatal
   error. A reference sequence therefore survives a round trip only if a converter also emits it as a segment
   record, and that record carries the reference's sequence as its segment sequence. A GFA `W` record whose
   `SeqID` is not a segment name in the same file does not round-trip, and the reference's own metadata
@@ -1005,7 +1047,8 @@ W	NA12878	2	sas	1	5	sas+
 
 The two walks are placed on the segments `scs` and `sas`, which are segment IDs `2` and `0`, so the
 `sequence_ids` values written below are `2` and `0` and the names are recovered by looking them up in the
-Segments block. The coordinates are 0-based and half-open, so `1 7` on `scs` is the interval `[1, 7)`. The
+Segments block. The coordinates are 0-based and the end is excluded, so `1 7` on `scs` is the interval `[1, 7)`, i.e.
+`scs[1:7]`: the 6 bases at positions 1 to 6. The
 two links have the overlap `*`, which is stored as the empty CIGAR entry.
 
 All strategy codes in this example use `none` (`0x00`) for strings and `varint` (`0x01`) for integers, so
@@ -1015,12 +1058,12 @@ the file is uncompressed and can be verified by hand. Segment IDs are assigned i
 The superstring heuristic is not part of the format — any superstring is valid as long as the positions are
 consistent. In this example no overlap was found, so the superstrings are plain concatenations.
 
-### A.1 File header (17 bytes, offsets 0-16)
+### A.1 File header (17 bytes, offsets [0, 17))
 
 | Field          | Bytes                     | Value      |
 | -------------- | ------------------------- | ---------- |
 | `magic_number` | `42 47 46 41`             | "BGFA"     |
-| `version`      | `00 00`                   | 0          |
+| `version`      | `01 00`                   | 1          |
 | `header_len`   | `08 00`                   | 8          |
 | `header_text`  | `56 4E 3A 5A 3A 31 2E 32` | "VN:Z:1.2" |
 | terminator     | `00`                      | `\0`       |
@@ -1028,7 +1071,7 @@ consistent. In this example no overlap was found, so the superstrings are plain 
 `header_text` is the 8 bytes `56 4E 3A 5A 3A 31 2E 32`, matching `header_len = 8`; the trailing `00` in the
 next row is the null terminator, which is not counted by `header_len`.
 
-### A.2 Segments block (82 bytes, offsets 17-98)
+### A.2 Segments block (82 bytes, offsets [17, 99))
 
 Header (39 bytes):
 
@@ -1059,7 +1102,7 @@ Payload (43 bytes), starting at offset 56:
 16 = 6 bytes of positions + 1 byte of blob length + 9 bytes of superstring.
 27 = 6 bytes of positions + 1 byte of blob length + 20 bytes of superstring.
 
-### A.3 Links block (54 bytes, offsets 99-152)
+### A.3 Links block (54 bytes, offsets [99, 153))
 
 Header (32 bytes):
 
@@ -1075,12 +1118,12 @@ Header (32 bytes):
 
 Payload (22 bytes), starting at offset 131:
 
-| Offset | Bytes                     | Meaning                                     |
-| ------ | ------------------------- | ------------------------------------------- |
-| 131    | `00 01`                   | `from_ids` [0, 1]                           |
-| 133    | `01 02`                   | `to_ids` [1, 2]                             |
-| 135    | `02 00 00 00 00 00 00 00` | `from_orientation` [+ -], LSB-first `0x02`  |
-| 143    | `01 00 00 00 00 00 00 00` | `to_orientation` [- +], LSB-first `0x01`    |
+| Offset | Bytes                     | Meaning                                          |
+| ------ | ------------------------- | ------------------------------------------------ |
+| 131    | `00 01`                   | `from_ids` [0, 1]                                |
+| 133    | `01 02`                   | `to_ids` [1, 2]                                  |
+| 135    | `02 00 00 00 00 00 00 00` | `from_orientation` [+ -], LSB-first `0x02`       |
+| 143    | `01 00 00 00 00 00 00 00` | `to_orientation` [- +], LSB-first `0x01`         |
 | 151    | `0A 0A`                   | two empty CIGAR entries, each terminated by `\n` |
 
 The two `bits` fields occupy the last 16 bytes of the 20-byte region, so `from_ids` and `to_ids` occupy the
@@ -1088,7 +1131,7 @@ first 20 - 16 = 4 bytes. With `record_num = 2` each bit field is one word, `8 * 
 Both GFA overlaps are `*`, which is stored as the empty string, so the CIGAR payload is two bare `\n`
 terminators and `uncompressed_links_cigars_len = 0`.
 
-### A.4 Paths block (86 bytes, offsets 153-238)
+### A.4 Paths block (86 bytes, offsets [153, 239))
 
 Header (59 bytes):
 
@@ -1125,7 +1168,7 @@ Payload (27 bytes), starting at offset 212:
 (`8 * ceil(3 / 64) = 8` each). The path has no CIGAR, so the CIGAR list holds one empty string, which the `none`
 decomposition writes as a lone `\n`.
 
-### A.5 Walks block (154 bytes, offsets 239-392)
+### A.5 Walks block (154 bytes, offsets [239, 393))
 
 Header (91 bytes):
 
@@ -1226,7 +1269,7 @@ Total size: 393 bytes (17 + 82 + 54 + 86 + 154).
 Full hex dump of the file:
 
 ```
-   0  42 47 46 41 00 00 08 00 56 4e 3a 5a 3a 31 2e 32  BGFA....VN:Z:1.2
+   0  42 47 46 41 01 00 08 00 56 4e 3a 5a 3a 31 2e 32  BGFA....VN:Z:1.2
   16  00 02 03 00 01 00 10 00 00 00 00 00 00 00 09 00  ................
   32  00 00 00 00 00 00 01 00 1b 00 00 00 00 00 00 00  ................
   48  14 00 00 00 00 00 00 00 00 03 06 03 06 09 09 73  ...............s

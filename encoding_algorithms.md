@@ -234,12 +234,18 @@ Variable-length integer encoding optimized for small values.
   `0x00`. A reader MUST reject as a fatal error a varint longer than 10 bytes, a varint whose value is
   `2^64` or more, and a multi-byte varint whose last byte is `0x00`.
 
+**Example:** the value 300 is `0b10_0101100`. The least significant group `0101100` is written first, with
+the continuation bit set, giving `0xAC`; the remaining group `0b10` is written last, giving `0x02`. The
+value is therefore stored as `AC 02`. The same value in `fixed16` is `2C 01`.
+
 These rules apply to every varint in BGFA, including the blob lengths, counts and positions that are
 always stored as varint regardless of the field's strategy.
 
 ### Fixed16 (0x02)
 
 Each integer is encoded as a fixed 16-bit little-endian value.
+
+**Example:** the value 300 is `0x012C`, stored least significant byte first as `2C 01`.
 
 ### Elias Gamma (0x04)
 
@@ -259,6 +265,10 @@ Elias gamma encodes a number `n >= 1` as a unary bit width followed by the low b
 - Unary: `111` + `0` = `1110`
 - `n - 2^2 = 5 - 4 = 1`, written in `L - 1 = 2` bits: `01`
 - Complete: `111001`
+
+Packed MSB-first, the first bit of the codeword occupies bit 7 of the first byte, so the 6-bit codeword
+`111001` is padded with two zero bits to `11100100` = `E4`. A reader that assumed LSB-first would read
+`0b00100111` = `0x27` instead.
 
 **This is not textbook Elias gamma.** Textbook gamma writes `L - 1` zeros followed by the `L` bits of `n`, so
 `n = 1` is the single bit `1`. BGFA writes `L` in unary with ones and a terminating zero, then the `L - 1`
@@ -297,6 +307,8 @@ Equivalently, written outermost first: `n` in binary, then `floor(log2(n))` in b
 - `binary(2) = 10`; the new `n` is `bit_width(2) - 1 = 2 - 1 = 1`, which stops the loop
 - the loop produced `10` then `101`; the terminating `0` is appended
 - complete: `101010` (6 bits)
+
+Packed MSB-first and padded with two zero bits, the codeword is `10101000` = `A8`.
 
 **Example:** n = 1 emits the single bit `0`. A decoder must therefore be able to recognise a lone `0` as a
 complete value.
@@ -408,9 +420,14 @@ Variable Byte encoding uses 7 bits per byte for data, with the high bit as the c
 
 Each integer is encoded as a fixed 32-bit little-endian value.
 
+**Example:** the value 300 is `0x0000012C`, stored least significant byte first as `2C 01 00 00`.
+
 ### Fixed64 (0x0B)
 
 Each integer is encoded as a fixed 64-bit little-endian value.
+
+**Example:** the value 300 is `0x000000000000012C`, stored least significant byte first as
+`2C 01 00 00 00 00 00 00`.
 
 ### Integer Validation Rules
 
@@ -795,6 +812,11 @@ block may be shorter. Each block is encoded independently by this pipeline:
   - the `0x04` Huffman method data of the MTF output, as in step 3. Its bitstream ends at the first byte
     boundary after the `symbol_count`-th symbol, and the next block starts at that byte.
 
+**Example:** a method data holding one block of 65536 bytes with primary index 0 begins `01 00 00 00`
+(block count 1), `00 00 00 00` (primary index 0), `00 00 01 00` (block size 65536). The block size is the
+clearest case: `65536 = 0x00010000`, so the least significant byte comes first, and a reader that assumed
+big-endian would read `0x00000100` = 256.
+
 **Framing.** The outer `blob length` varint of [Blob Framing](#blob-framing) applies here as it does to
 every method: it is a byte count of the whole method data, and the decoder bounds its reads with it. Each
 block is self-delimiting through its own `symbol_count`.
@@ -839,6 +861,9 @@ integer encoding used for the integer lists of this layout.
   many bytes. A writer MUST NOT store the same string as two entries
 - `uints` list: one dictionary index per string, in the original order of the strings, encoded using the same
   integer strategy as the offsets. The number of indices equals the number of strings in the field
+
+**Example:** a dictionary of 3 entries starts with `03 00`: `N = 3` is a `uint16` stored least significant
+byte first, so a reader that assumed big-endian would read `0x0300` = 768.
 
 **Validation.** A reader MUST reject the field as a fatal error if `N` is 0, if `offsets[0]` is not 0, if any
 offset is greater than the next, if the last offset does not equal the dictionary blob length, if the

@@ -152,29 +152,21 @@ We associate an internal segment ID to each segment name, where the segment ID i
 incrementing integer starting at 0. Segment IDs are assigned in the order segment names appear in the file.
 
 Segment IDs are **global to the file**: the segment with ID `i` is the `i`-th (0-based) segment record in file
-order, across all Segments blocks. A record in any block MAY reference any segment ID in the file, including one
-defined in a block that appears later in the file; readers MUST NOT assume that referenced segments are
+order, across all Segments blocks. A record in any block MAY reference any segment ID appeared previously in the
+file; readers MAY assume that referenced segments are
 already defined.
 
 This is the single definition of the segment ID namespace. Every other field that holds a segment ID — the
 Links block `from_ids` and `to_ids`, the `walks_segments` of the Paths and Walks blocks, and the Walks block
 `sequence_ids` — uses this same namespace, so one Segments-block scan resolves all of them.
 
-**Resolving a segment ID to a name.** Because a defining Segments block MAY appear later in the file than the
-block holding the reference, this check applies only once the whole file has been read:
+**Resolving a segment ID to a name.**
+A reader that resolves a segment ID to a segment name MUST treat an ID that no Segments block in the file
+defines as a fatal error, and MUST NOT substitute a placeholder or a default name.
 
-- A reader that resolves a segment ID to a segment name MUST treat an ID that no Segments block in the file
-  defines as a fatal error, and MUST NOT substitute a placeholder or a default name.
-- A reader MAY defer resolution until after the final block, and SHOULD do so, because that is the only point
-  at which every Segments block is known.
-- A reader that decodes segment IDs without resolving them has nothing to check at that point, so it MAY skip
-  the check entirely. This includes a streaming reader that emits records as it decodes them, which cannot
-  retroactively retract what it has already emitted; such a reader accepts the risk that a dangling ID is
-  never detected.
-
-This applies to every field that holds a segment ID — `from_ids` and `to_ids` in the Links block,
-`walks_segments` in the Paths and Walks blocks, and `sequence_ids` in the Walks block — not only to
-`sequence_id`.
+Segment IDs in any field — `from_ids` and `to_ids` in the Links block,
+`walks_segments` in the Paths and Walks blocks, and `sequence_ids` in the Walks block — MUST have appeared in a
+previous Segment block.
 
 See [Block Capacity and Splitting](#block-capacity-and-splitting) for the limit that applies to every block
 type, and how writers split records across blocks. Segment ID numbering continues across Segments blocks.
@@ -598,6 +590,14 @@ lists).
 - All other bit streams — that is, the bit streams produced by Elias gamma/omega, Golomb, Rice, Huffman,
   2-bit DNA, and any other bit-oriented method — are packed **MSB-first**: the first bit of the
   stream occupies bit 7 of the first byte, the second bit 6, and so on.
+
+**Example.** The bit list `[1, 0, 1, 1, 0]` is packed differently by the two orders:
+
+- MSB-first (a gamma, Golomb, Rice, Huffman or 2-bit DNA stream): bit 0 goes to bit 7, bit 1 to bit 6, and so
+  on, giving `10110` in the high bits of the first byte, i.e. `0b10110000` = `B0`. The three unused low bits
+  are 0.
+- LSB-first (a `bits` field): bit 0 goes to bit 0, bit 1 to bit 1, and so on, giving `0b00001101` = `0D` in
+  the low byte of the first `uint64` word, stored little-endian as `0D 00 00 00 00 00 00 00`.
 
 In both cases, any remaining bits in the final byte or word of a bit stream are set to 0 when writing and MUST
 be ignored when reading.

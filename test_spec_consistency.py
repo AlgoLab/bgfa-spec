@@ -465,3 +465,66 @@ def test_appendix_arithmetic_model():
         "20 = 2 bytes of `walks_lengths` + 2 bytes of absolute deltas + 8 bytes of sign bits + 8 bytes "
         "of the `uint64` word of `walks_orientations`" in NORM_BINARY
     )
+
+
+def _pack_msb_first(bits):
+    """Pack a bit list MSB-first, zero-padding the final byte."""
+    value = 0
+    for bit in bits:
+        value = value << 1 | bit
+    return value << (-len(bits) % 8)
+
+
+def _pack_lsb_first(bits):
+    """Pack a bit list LSB-first, zero-padding the final byte."""
+    return sum(bit << i for i, bit in enumerate(bits))
+
+
+def test_msb_first_examples_are_arithmetically_correct():
+    # The two bit orders must be shown side by side, and the byte strings
+    # recomputed here, so a wrong example cannot pass.
+    bits = [1, 0, 1, 1, 0]
+    assert _pack_msb_first(bits) == 0b10110000 == 0xB0
+    assert _pack_lsb_first(bits) == 0b00001101 == 0x0D
+    assert "`0b10110000` = `B0`" in NORM_BINARY
+    assert "`0b00001101` = `0D`" in NORM_BINARY
+    # Elias gamma n = 5 is the 6-bit codeword 111001; MSB-first it is E4, and
+    # the LSB-first misreading is 0x27.
+    gamma = [1, 1, 1, 0, 0, 1]
+    assert _pack_msb_first(gamma) == 0b11100100 == 0xE4
+    assert _pack_lsb_first(gamma) == 0b00100111 == 0x27
+    assert "`11100100` = `E4`" in NORM_ENCODING
+    assert "`0b00100111` = `0x27`" in NORM_ENCODING
+    # Elias omega n = 5 is the 6-bit codeword 101010.
+    omega = [1, 0, 1, 0, 1, 0]
+    assert _pack_msb_first(omega) == 0b10101000 == 0xA8
+    assert "`10101000` = `A8`" in NORM_ENCODING
+
+
+def test_byte_order_examples_are_arithmetically_correct():
+    # Every format that states a byte order must also show one. The byte
+    # strings are recomputed here, so a wrong example cannot pass.
+    value = 300
+    assert value.to_bytes(2, "little").hex(" ").upper() == "2C 01"
+    assert value.to_bytes(4, "little").hex(" ").upper() == "2C 01 00 00"
+    assert value.to_bytes(8, "little").hex(" ").upper() == "2C 01 00 00 00 00 00 00"
+    # varint: least significant 7-bit group first, continuation bit set on all
+    # but the last byte.
+    groups, n = [], value
+    while True:
+        groups.append(n & 0x7F)
+        n >>= 7
+        if not n:
+            break
+    varint = bytes(g | (0x80 if i < len(groups) - 1 else 0) for i, g in enumerate(groups))
+    assert varint.hex(" ").upper() == "AC 02"
+    assert "stored as `AC 02`" in NORM_ENCODING
+    assert "stored least significant byte first as `2C 01`" in NORM_ENCODING
+    assert "stored least significant byte first as `2C 01 00 00`" in NORM_ENCODING
+    assert "stored least significant byte first as `2C 01 00 00 00 00 00 00`" in NORM_ENCODING
+    # BWT + Huffman: uint32 block count, primary index and block size.
+    assert (65536).to_bytes(4, "little").hex(" ").upper() == "00 00 01 00"
+    assert "`00 00 01 00` (block size 65536)" in NORM_ENCODING
+    # Dictionary: uint16 dictionary size N.
+    assert (3).to_bytes(2, "little").hex(" ").upper() == "03 00"
+    assert "a dictionary of 3 entries starts with `03 00`" in NORM_ENCODING

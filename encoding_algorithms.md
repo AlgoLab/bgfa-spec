@@ -249,42 +249,46 @@ Each integer is encoded as a fixed 16-bit little-endian value.
 
 ### Elias Gamma (0x04)
 
-Elias gamma encodes a number `n >= 1` as a unary bit width followed by the low bits of `n`.
+Elias gamma encodes a number `n >= 1` as a unary bit width followed by the bits of `n`. This is **textbook
+Elias gamma**, so a generic gamma implementation produces compatible codewords.
 
 **Format:**
 
 - Let `L = floor(log2(n)) + 1`, the number of bits in the binary form of `n`.
-- Write `L` in unary: `L` one bits followed by a single zero bit. This is the terminator the decoder
-  needs, so gamma is self-delimiting.
-- Write `n - 2^(L-1)` in binary, in exactly `L - 1` bits, MSB-first (see
-  [Conventions](gfa_binary_format.md#conventions)). For `L = 1` this part is empty.
+- Write `L - 1` zero bits followed by a single one bit. This is the terminator the decoder needs, so gamma
+  is self-delimiting.
+- Write the `L` bits of `n` in binary, most significant bit first. The leading bit is always 1.
 
 **Example:** n = 5
 
 - `L = 3`
-- Unary: `111` + `0` = `1110`
-- `n - 2^2 = 5 - 4 = 1`, written in `L - 1 = 2` bits: `01`
-- Complete: `111001`
+- Unary: `00` + `1` = `001`
+- `binary(5) = 101`
+- Complete: `00101` (5 bits)
 
-Packed MSB-first, the first bit of the codeword occupies bit 7 of the first byte, so the 6-bit codeword
-`111001` is padded with two zero bits to `11100100` = `E4`. A reader that assumed LSB-first would read
-`0b00100111` = `0x27` instead.
+Packed LSB-first (see [Conventions](gfa_binary_format.md#conventions)), the first bit of the codeword
+occupies bit 0 of the first byte, so the 5-bit codeword `00101` is padded with three zero bits to
+`0b00010100` = `0x14`.
 
-**This is not textbook Elias gamma.** Textbook gamma writes `L - 1` zeros followed by the `L` bits of `n`, so
-`n = 1` is the single bit `1`. BGFA writes `L` in unary with ones and a terminating zero, then the `L - 1`
-low bits, so `n = 1` is `10` and every codeword is one bit longer than textbook gamma. An implementation MUST
-follow the definition above; a generic gamma library will not produce compatible output.
+**Example:** n = 1 is the single bit `1`, packed as `0b00000001` = `0x01`.
+
+**Example:** the list `[1, 5]`
+
+- `n = 1`: `L = 1`, unary `1`, no low bits → `1`
+- `n = 5`: `L = 3`, unary `001`, low bits `101` → `00101`
+- Bit stream: `1` `00101` = `100101` (6 bits), padded with two zero bits and packed LSB-first:
+  `0b00101001` = `0x29`
 
 **Zero cannot be represented.** Gamma has no codeword for `n = 0`, because `L` would be 0 and the unary
-part `0` would not be a legal code. A writer MUST NOT select `0x04` for an integer list that contains a 0 —
-in particular segment IDs and their deltas, which can be 0. A reader MUST reject a field as a
-fatal error if the unary prefix decodes to `L = 0` or to `L > 64`, or if any other part of the value cannot
-be decoded.
+part would be empty. A writer MUST NOT select `0x04` for an integer list that contains a 0 — in particular
+segment IDs and their deltas, which can be 0. A reader MUST reject a field as a fatal error if the unary
+prefix decodes to `L > 64`, or if any other part of the value cannot be decoded.
 
 ### Elias Omega (0x05)
 
 Elias omega encodes a positive integer by recursing on its bit width. The recursion terminates in a
-single `0` bit, so an omega codeword is self-delimiting and is written MSB-first (see
+single `0` bit, so an omega codeword is self-delimiting. The bits of a codeword are written most
+significant bit first, and the resulting stream is packed LSB-first (see
 [Conventions](gfa_binary_format.md#conventions)).
 
 **Encoding.** Start with `code = "0"`. While `n > 1`, prepend the full binary representation of `n` to
@@ -298,8 +302,8 @@ Equivalently, written outermost first: `n` in binary, then `floor(log2(n))` in b
 **Decoding.** Set `current = 1`, then repeat:
 
 1. Read one bit. If it is `0`, stop: the decoded value is `current`.
-2. Otherwise set `next = 1`, read exactly `current` more bits and append each to `next` MSB-first
-   (`next = next << 1 | bit`), then set `current = next` and go back to step 1.
+2. Otherwise set `next = 1`, read exactly `current` more bits and append each to `next` most significant
+   bit first (`next = next << 1 | bit`), then set `current = next` and go back to step 1.
 
 **Example:** n = 5
 
@@ -308,7 +312,7 @@ Equivalently, written outermost first: `n` in binary, then `floor(log2(n))` in b
 - the loop produced `10` then `101`; the terminating `0` is appended
 - complete: `101010` (6 bits)
 
-Packed MSB-first and padded with two zero bits, the codeword is `10101000` = `A8`.
+Packed LSB-first and padded with two zero bits, the codeword is `0b00010101` = `0x15`.
 
 **Example:** n = 1 emits the single bit `0`. A decoder must therefore be able to recognise a lone `0` as a
 complete value.
@@ -330,8 +334,8 @@ with `0x06` uses `b = 128`, and `b` is **not transmitted**.
   - Write q in unary (q ones, then zero)
   - Write r in binary using `ceil(log2(b))` = 7 bits
 
-The unary prefix and the 7-bit remainder are written MSB-first (see
-[Conventions](gfa_binary_format.md#conventions)).
+The unary prefix and the 7-bit remainder are written most significant bit first within the codeword, and the
+resulting stream is packed LSB-first (see [Conventions](gfa_binary_format.md#conventions)).
 
 Because `b = 128 = 2^7`, Golomb as defined here is bit-identical to [Rice](#rice-0x07) with `k = 7`.
 The two codes differ only in that Rice stores `k` and Golomb does not.
@@ -354,7 +358,8 @@ Rice coding is Golomb with `b` as a power of 2: `b = 2^k`.
   - Write q in unary (q ones, then zero)
   - Write r in binary using k bits
 
-The unary prefix and the k-bit remainder are written MSB-first.
+The unary prefix and the k-bit remainder are written most significant bit first within the codeword, and the
+resulting stream is packed LSB-first.
 
 **Example:** For k=3 and sequence [5, 12, 7]:
 
@@ -362,8 +367,9 @@ The unary prefix and the k-bit remainder are written MSB-first.
 - 5: `q = 0`, `r = 5` → `0` `101`
 - 12: `q = 1`, `r = 4` → `10` `100`
 - 7: `q = 0`, `r = 7` → `0` `111`
-- Bit stream: `0101 10100 0111` (13 bits), padded with three zero bits: `01011010 00111000`
-- Complete list: `03 5A 38` (3 bytes)
+- Bit stream: `0101 10100 0111` (13 bits), packed LSB-first and padded with three zero bits:
+  `01011010 00011100`
+- Complete list: `03 5A 1C` (3 bytes)
 
 ### StreamVByte (0x08)
 
@@ -508,7 +514,7 @@ The Huffman encoding of a string consists of:
 | `codebook_len`     | Length of the encoded codebook in bytes                | `uint16` |
 | `codebook`         | Bit-lengths, one little-endian `uint16` per alphabet symbol | `bytes`  |
 | `symbol_count`     | Number of symbols to decode (see below)                | `varint` |
-| `huffman_bitstream`| The encoded symbols, MSB-first, padded with zeros to a byte boundary | `bytes` |
+| `huffman_bitstream`| The encoded symbols, packed LSB-first, padded with zeros to a byte boundary | `bytes` |
 
 **Framing.** The blob is:
 
@@ -619,17 +625,18 @@ codebook, since the symbols exceed the `0x04` nibble range):
 1. Turn the input into symbols: for `0x04` each byte becomes two nibbles (high nibble, low nibble); for
    `0xF4` each byte is one symbol
 2. Look up each symbol's code in the reconstructed codebook
-3. Concatenate all codes, MSB-first, into a bitstream
-4. Pad to byte boundary with zeros
+3. Concatenate all codes, each written most significant bit first, into a bitstream
+4. Pack the bitstream LSB-first and pad it to a byte boundary with zeros
 
 **Decoding:** the decoder reads `symbol_count` and then decodes exactly that many symbols — `2 * L` nibbles
-for `0x04`, `L` bytes for `0xF4`. Trailing zero bits in the last byte of the bitstream are padding and MUST
-be ignored. Because `symbol_count` is stored explicitly, a decoder never has to infer the decoded length from
-the string metadata, and the decoded superstring length is independent of how many overlaps the superstring
-heuristic found.
+for `0x04`, `L` bytes for `0xF4`. The unused high bits of the last byte of the bitstream are padding and
+MUST be ignored. Because `symbol_count` is stored explicitly, a decoder never has to infer the decoded
+length from the string metadata, and the decoded superstring length is independent of how many overlaps the
+superstring heuristic found.
 
-**Bit order:** the Huffman bit stream is packed MSB-first (see
-[Conventions](gfa_binary_format.md#conventions)), independently of the LSB-first `bits` type.
+**Bit order:** the Huffman bit stream is packed LSB-first, like every other bit stream in BGFA (see
+[Conventions](gfa_binary_format.md#conventions)). The codes themselves are unchanged: only the order in
+which their bits are laid into bytes follows the general rule.
 
 #### Nibble-Level Processing
 
@@ -656,17 +663,20 @@ Only the four uppercase bytes `A`, `C`, `G` and `T` are stored in `packed_bases`
 lowercase letters, `U`, ambiguity codes, or anything else — MUST be stored in the exception table, so the
 method is lossless on any byte buffer.
 
-**Bit packing:** Nucleotides are packed MSB-first. The first nucleotide is stored in bits 7-6 of the first byte, the second in bits 5-4, the third in bits 3-2, the fourth in bits 1-0. Subsequent nucleotides continue in subsequent bytes.
+**Bit packing:** Nucleotides are packed LSB-first, like every other bit stream in BGFA (see
+[Conventions](gfa_binary_format.md#conventions)). The first nucleotide is stored in bits 1-0 of the first
+byte, the second in bits 3-2, the third in bits 5-4, the fourth in bits 7-6. Subsequent nucleotides continue
+in subsequent bytes.
 
 **Example:** Sequence "ACGT" (4 nucleotides):
 
 - A=00, C=01, G=10, T=11
-- Packed: `0b00011011` = 0x1B (1 byte)
+- Packed: `0b11011000` = 0xD8 (1 byte)
 
 **Example:** Sequence "ACGTA" (5 nucleotides):
 
 - A=00, C=01, G=10, T=11, A=00
-- Packed: `0b00011011` `0b00000000` = 0x1B 0x00 (2 bytes, last 6 bits are padding)
+- Packed: `0b11011000` `0b00000000` = 0xD8 0x00 (2 bytes, the 6 high bits of the second byte are padding)
 
 **Note:** Unused bits in the final byte MUST be set to 0 when writing and MUST be ignored when reading.
 
@@ -1030,6 +1040,10 @@ Codes `0x9` to `0xE` are unassigned, and `0xF` is the padding marker.
 The decoded buffer MUST be exactly `ceil(T / 2)` bytes long. A reader MUST reject as a fatal error a buffer
 of any other length, a code in `0x9`..`0xE`, a `0xF` anywhere except the low nibble of the last byte when `T`
 is odd, and a low nibble of the last byte other than `0xF` when `T` is odd. When `T = 0` the buffer is empty.
+
+**Nibble order, not bit order.** The operations buffer is packed at *nibble* granularity, high nibble first,
+so the LSB-first bit-packing rule of [Conventions](gfa_binary_format.md#conventions) does not apply to it:
+once built, the buffer is an ordinary byte buffer and is handed to `SS` unchanged.
 
 The buffer is then encoded with the string method `SS`, like any other byte buffer.
 

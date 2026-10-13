@@ -541,7 +541,7 @@ bytes.
 - Blocks of the same type are not required to be contiguous
 - Different section types can appear in any order relative to each other.
 
-**Endianness:** All multi-byte integer fields (`uint16`, `uint32`, `uint64`) are encoded in little-endian format. Strategy codes and other byte sequences have no endianness considerations as they are simple sequences of bytes.
+**Endianness:** All multi-byte integer fields (`uint16`, `uint32`, `uint64`) are encoded in little-endian format, i.e. the least significant byte comes first. For example, the `uint32` value `0x12345678` is stored as the four bytes `78 56 34 12`, and the `uint16` value `0x0102` as the two bytes `02 01`. Strategy codes and other byte sequences have no endianness considerations as they are simple sequences of bytes.
 
 **Alignment:** All fields begin at the next byte boundary after the previous field, and no inter-field padding
 is applied. `bits` fields are the one exception to byte-granularity: they occupy a whole number of 8-byte
@@ -583,28 +583,25 @@ lists).
 **Integer range.** Every decoded integer is an unsigned 64-bit value. An encoding that decodes to a value of
 `2^64` or more is a fatal error, whatever the method.
 
-**Bit packing.** There are exactly two bit orders in BGFA, and each is used by a specific class of encoding:
+**Bit packing.** There is exactly one bit order in BGFA: every bit stream is packed **LSB-first**. The first
+bit of the stream occupies bit 0 of the first byte, the second bit 1, and so on, so stream bit `i` is stored
+at bit `i % 8` of byte `i // 8`. This applies to every bit-oriented method — Elias gamma/omega, Golomb, Rice,
+Huffman, 2-bit DNA — and to the `bits` type.
 
-- The `bits` type (orientations, signs) is packed LSB-first into little-endian `uint64` words. See
-  [Packed Bits](#packed-bits).
-- All other bit streams — that is, the bit streams produced by Elias gamma/omega, Golomb, Rice, Huffman,
-  2-bit DNA, and any other bit-oriented method — are packed **MSB-first**: the first bit of the
-  stream occupies bit 7 of the first byte, the second bit 6, and so on.
+The `bits` type is the one special case: its bytes are grouped into little-endian `uint64` words, so stream
+bit `i` is stored at bit `i % 64` of word `i // 64`. See [Packed Bits](#packed-bits).
 
-**Example.** The bit list `[1, 0, 1, 1, 0]` is packed differently by the two orders:
+**Example.** The bit list `[1, 0, 1, 1, 0]` is packed as `0b00001101` = `0D`: bit 0 goes to bit 0, bit 1 to
+bit 1, and so on. As a `bits` field that byte is the low byte of the first `uint64` word, stored
+little-endian as `0D 00 00 00 00 00 00 00`; as a gamma, Golomb, Rice, Huffman or 2-bit DNA stream it is the
+single byte `0D`.
 
-- MSB-first (a gamma, Golomb, Rice, Huffman or 2-bit DNA stream): bit 0 goes to bit 7, bit 1 to bit 6, and so
-  on, giving `10110` in the high bits of the first byte, i.e. `0b10110000` = `B0`. The three unused low bits
-  are 0.
-- LSB-first (a `bits` field): bit 0 goes to bit 0, bit 1 to bit 1, and so on, giving `0b00001101` = `0D` in
-  the low byte of the first `uint64` word, stored little-endian as `0D 00 00 00 00 00 00 00`.
-
-In both cases, any remaining bits in the final byte or word of a bit stream are set to 0 when writing and MUST
-be ignored when reading.
+Any remaining bits in the final byte or word of a bit stream are set to 0 when writing and MUST be ignored
+when reading.
 
 **varint continuation bit.** A varint (or VByte) encodes 7 data bits plus a continuation bit per byte. The
 continuation bit is the **most significant bit of the byte**; data bits are stored **least-significant group
-first**. This is the same in both endianness conventions and applies to all bit orders.
+first**. This is the same in both endianness conventions and is independent of the bit-packing order above.
 
 **Strings.** Strings are stored as raw bytes without any terminator; BGFA does not interpret their encoding.
 Input strings to the `strings` type do NOT include null terminators.
@@ -924,7 +921,8 @@ The `compression_walks` (Walks block) and `compression_paths` (Paths block) fiel
 
 ## Packed Bits
 
-A `bits` field represents a list of bits packed into `uint64` words in little-endian format.
+A `bits` field represents a list of bits packed into `uint64` words in little-endian format. It is the
+general LSB-first bit packing of [Conventions](#conventions) applied to `uint64` words instead of bytes.
 
 **Packing strategy:**
 

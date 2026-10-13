@@ -467,38 +467,77 @@ def test_appendix_arithmetic_model():
     )
 
 
-def _pack_msb_first(bits):
-    """Pack a bit list MSB-first, zero-padding the final byte."""
-    value = 0
-    for bit in bits:
-        value = value << 1 | bit
-    return value << (-len(bits) % 8)
-
-
 def _pack_lsb_first(bits):
     """Pack a bit list LSB-first, zero-padding the final byte."""
     return sum(bit << i for i, bit in enumerate(bits))
 
 
-def test_msb_first_examples_are_arithmetically_correct():
-    # The two bit orders must be shown side by side, and the byte strings
-    # recomputed here, so a wrong example cannot pass.
+def _pack_lsb_bytes(bits):
+    """Pack a bit list LSB-first into whole bytes, zero-padding the last."""
+    return bytes(_pack_lsb_first(bits[i:i + 8]) for i in range(0, len(bits), 8))
+
+
+def _gamma_codeword(n):
+    """Textbook Elias gamma: L - 1 zeros, then the L bits of n."""
+    binary = bin(n)[2:]
+    return [0] * (len(binary) - 1) + [int(bit) for bit in binary]
+
+
+def _rice_bits(values, k):
+    """Rice codewords for a list, concatenated in order."""
+    bits = []
+    for value in values:
+        quotient, remainder = value >> k, value & ((1 << k) - 1)
+        bits += [1] * quotient + [0]
+        bits += [int(bit) for bit in bin(remainder)[2:].zfill(k)]
+    return bits
+
+
+def test_lsb_first_examples_are_arithmetically_correct():
+    # BGFA has a single bit order: every bit stream is packed LSB-first. The
+    # byte strings are recomputed here, so a wrong example cannot pass.
     bits = [1, 0, 1, 1, 0]
-    assert _pack_msb_first(bits) == 0b10110000 == 0xB0
     assert _pack_lsb_first(bits) == 0b00001101 == 0x0D
-    assert "`0b10110000` = `B0`" in NORM_BINARY
     assert "`0b00001101` = `0D`" in NORM_BINARY
-    # Elias gamma n = 5 is the 6-bit codeword 111001; MSB-first it is E4, and
-    # the LSB-first misreading is 0x27.
-    gamma = [1, 1, 1, 0, 0, 1]
-    assert _pack_msb_first(gamma) == 0b11100100 == 0xE4
-    assert _pack_lsb_first(gamma) == 0b00100111 == 0x27
-    assert "`11100100` = `E4`" in NORM_ENCODING
-    assert "`0b00100111` = `0x27`" in NORM_ENCODING
+    # Elias gamma is textbook gamma: n = 5 is the 5-bit codeword 00101.
+    assert _gamma_codeword(5) == [0, 0, 1, 0, 1]
+    assert _pack_lsb_first(_gamma_codeword(5)) == 0b00010100 == 0x14
+    assert "`0b00010100` = `0x14`" in NORM_ENCODING
+    # n = 1 is the single bit 1, and the list [1, 5] packs to 0x29.
+    assert _gamma_codeword(1) == [1]
+    assert _pack_lsb_first(_gamma_codeword(1)) == 0b00000001 == 0x01
+    assert "`0b00000001` = `0x01`" in NORM_ENCODING
+    assert _pack_lsb_first(_gamma_codeword(1) + _gamma_codeword(5)) == 0b00101001 == 0x29
+    assert "`0b00101001` = `0x29`" in NORM_ENCODING
     # Elias omega n = 5 is the 6-bit codeword 101010.
     omega = [1, 0, 1, 0, 1, 0]
-    assert _pack_msb_first(omega) == 0b10101000 == 0xA8
-    assert "`10101000` = `A8`" in NORM_ENCODING
+    assert _pack_lsb_first(omega) == 0b00010101 == 0x15
+    assert "`0b00010101` = `0x15`" in NORM_ENCODING
+    # Rice k = 3, [5, 12, 7]: the 13-bit stream 0101101000111.
+    rice = _rice_bits([5, 12, 7], 3)
+    assert "".join(map(str, rice)) == "0101101000111"
+    assert _pack_lsb_bytes(rice) == bytes([0x5A, 0x1C])
+    assert "Complete list: `03 5A 1C`" in NORM_ENCODING
+    # 2-bit DNA: "ACGT" and "ACGTA".
+    acgt = [0, 0, 0, 1, 1, 0, 1, 1]
+    assert _pack_lsb_bytes(acgt) == bytes([0xD8])
+    assert "Packed: `0b11011000` = 0xD8 (1 byte)" in NORM_ENCODING
+    assert _pack_lsb_bytes(acgt + [0, 0]) == bytes([0xD8, 0x00])
+    assert "Packed: `0b11011000` `0b00000000` = 0xD8 0x00" in NORM_ENCODING
+
+
+def test_single_bit_order_is_stated_and_no_msb_first_claim_survives():
+    # Change detector: the two-order model must not creep back in.
+    assert "There is exactly one bit order in BGFA" in NORM_BINARY
+    assert "exactly two bit orders" not in NORM_BINARY
+    assert "MSB-first" not in NORM_BINARY
+    assert "MSB-first" not in NORM_ENCODING
+    # Elias gamma is textbook gamma, and the divergence note is gone.
+    assert "**textbook Elias gamma**" in NORM_ENCODING
+    assert "not textbook Elias gamma" not in NORM_ENCODING
+    assert "one bit longer than textbook gamma" not in NORM_ENCODING
+    # The nibble-packed CIGAR operations buffer is explicitly out of scope.
+    assert "Nibble order, not bit order" in NORM_ENCODING
 
 
 def test_byte_order_examples_are_arithmetically_correct():

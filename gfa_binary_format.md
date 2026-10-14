@@ -6,7 +6,8 @@ encoding algorithms referenced below are specified in [encoding_algorithms.md](e
 is part of this specification.
 
 **Normative keywords.** `MUST`, `MUST NOT`, `SHOULD` and `MAY` are to be interpreted as in RFC 2119.
-"Fatal error" always means that the reader MUST reject the field or the whole file and MUST NOT continue.
+"Fatal error" always means that the reader MUST reject the whole file and MUST NOT continue. Wherever this
+specification says that a reader rejects a field or a block, it rejects the whole file.
 
 ## Table of Contents
 
@@ -60,7 +61,8 @@ All other parts are a list of blocks. There can be several blocks of the same ty
 - List of Blocks (segments, links, paths, walks)
 
 Each block contains a `section_id` field that identifies its type, allowing blocks
-to appear in any order in the file.
+to appear in any order in the file, subject to one constraint: a block that references a segment ID MUST
+come after the Segments block that defines it (see [Segments Block](#segments-block)).
 
 ### Section IDs Reference
 
@@ -91,7 +93,8 @@ writer MUST NOT write a block with `record_num = 0` (a block type with no record
 
 A writer that needs more than 65535 records of one type MUST split them across several blocks of that type.
 Splitting is **by whole records only**: a record is never split across two blocks. The blocks of a split type
-are consecutive in meaning but need not be contiguous in the file, since blocks may appear in any order.
+are consecutive in meaning but need not be contiguous in the file, since blocks may appear in any order
+(subject to the segment-reference constraint of [Segments Block](#segments-block)).
 
 Segment IDs are the one case where splitting has an extra consequence: the numbering continues across the
 blocks in file order. If the Segments blocks preceding a given Segments block in the file hold `m` records in
@@ -124,7 +127,7 @@ For implementation details of each encoding method, see [encoding_algorithms.md]
 | Field          | Description                                             | Type                      |
 | -------------- | ------------------------------------------------------- | ------------------------- |
 | `magic_number` | Magic number for bgfa files = "BGFA" (0x41464742)       | `uint32`                  |
-| `version`      | Format version (progressive number, starts at 0)        | `uint16`                  |
+| `version`      | Format version (progressive number, starts at 1)        | `uint16`                  |
 | `header_len`   | length of the header string (excluding null terminator) | `uint16`                  |
 | `header_text`  | GFA header text                                         | `bytes` + null terminator |
 
@@ -140,8 +143,8 @@ several `H` lines is not preserved.
 **Note:** The magic number 0x41464742 corresponds to ASCII "BGFA" when read as little-endian bytes: 0x42='B', 0x47='G', 0x46='F', 0x41='A'.
 
 **Version:** The version field is a progressive integer; this document defines version `1`, and a writer
-conforming to it MUST write `version = 1`. Version `0` identifies pre-release drafts of this format, whose
-layout is not defined by any published specification: a reader MUST treat `version = 0` as a fatal error. A
+conforming to it MUST write `version = 1`. Version numbers start at `1`; `0` is not a valid version, and a
+reader MUST treat `version = 0` as a fatal error. A
 reader MUST also reject the file with a fatal error if `version` is **larger** than the highest version it
 supports. A reader that supports a later version `v` MUST accept every published version from `1` to `v`,
 decoding each file according to the specification of its own version.
@@ -152,21 +155,24 @@ We associate an internal segment ID to each segment name, where the segment ID i
 incrementing integer starting at 0. Segment IDs are assigned in the order segment names appear in the file.
 
 Segment IDs are **global to the file**: the segment with ID `i` is the `i`-th (0-based) segment record in file
-order, across all Segments blocks. A record in any block MAY reference any segment ID appeared previously in the
-file; readers MAY assume that referenced segments are
-already defined.
+order, across all Segments blocks.
+
+**No forward references.** A record MUST NOT reference a segment that is defined later in the file: every
+segment ID used by a block MUST be defined by a Segments block that precedes that block in file order.
+Equivalently, when a reader reaches a block, every segment ID in it is smaller than the total `record_num` of
+the Segments blocks read so far. Readers MAY therefore resolve segment IDs in a single pass.
 
 This is the single definition of the segment ID namespace. Every other field that holds a segment ID — the
 Links block `from_ids` and `to_ids`, the `walks_segments` of the Paths and Walks blocks, and the Walks block
 `sequence_ids` — uses this same namespace, so one Segments-block scan resolves all of them.
 
 **Resolving a segment ID to a name.**
-A reader that resolves a segment ID to a segment name MUST treat an ID that no Segments block in the file
+A reader that resolves a segment ID to a segment name MUST treat an ID that no preceding Segments block
 defines as a fatal error, and MUST NOT substitute a placeholder or a default name.
 
 Segment IDs in any field — `from_ids` and `to_ids` in the Links block,
 `walks_segments` in the Paths and Walks blocks, and `sequence_ids` in the Walks block — MUST have appeared in a
-previous Segment block.
+previous Segments block.
 
 See [Block Capacity and Splitting](#block-capacity-and-splitting) for the limit that applies to every block
 type, and how writers split records across blocks. Segment ID numbering continues across Segments blocks.
@@ -375,7 +381,7 @@ haplotype indices, followed by `record_num` sequence IDs, followed by `record_nu
   [Segments Block](#segments-block)), i.e. the identical namespace used by the Links block `from_ids` and
   `to_ids` and by `walks_segments` in the Paths and Walks blocks. The walk's reference sequence is therefore
   also a vertex of the pangenome graph, and a converter that wants to preserve a reference MUST emit it as a
-  segment record of some Segments block in the same file. This is an internal ID, not a sequence name: a
+  segment record of a Segments block that precedes the Walks block. This is an internal ID, not a sequence name: a
   reader recovers the name by looking the ID up in the Segments blocks, which is the only mapping this
   format defines.
 - `start_position`: the `SeqStart` column of the GFA `W` line, the 0-based start coordinate of the walk on
@@ -450,16 +456,24 @@ once, at the position of its absolute values.
 **Size rules.** The size of each part follows from these rules, evaluated in this order:
 
 1. **Fixed-size integer fields.** A list encoded with `fixed16`, `fixed32`, or `fixed64` has size
-   `n * 2`, `n * 4`, or `n * 8`, where `n` is the number of integers implied by the header
-   (`record_num`; `record_num` for **each** of the Walks `start_positions` and `end_positions`
-   sub-fields, which have the independent strategies `compression_positions_start` and
-   `compression_positions_end`; or `uncompressed_walk_len` for the `walks_segments` absolute values).
+   `n * 2`, `n * 4`, or `n * 8`, where `n` is the number of integers in the list:
+   - `record_num` for the start positions and for the end positions of a `strings` field, for `from_ids`,
+     for `to_ids`, for `haplotype_indices`, for `sequence_ids`, for `walks_lengths`, for the operation
+     counts of a CIGAR `numOperations` decomposition, and for the indices of a Dictionary field;
+   - `record_num` for **each** of the Walks `start_positions` and `end_positions` sub-fields, which have
+     the independent strategies `compression_positions_start` and `compression_positions_end`;
+   - `uncompressed_walk_len` (Walks block) or `uncompressed_paths_len` (Paths block) for the
+     `walks_segments` absolute values;
+   - `N + 1` for the offsets of a Dictionary field, where `N` is the dictionary size;
+   - the sum of the decoded operation counts for the operation lengths of a CIGAR `numOperations`
+     decomposition.
+
    For a `uints-delta` field this fixed-width size applies to the absolute values of the deltas; the
    sign bits are a separate `bits` field covered by rule 3.
 2. **Self-delimiting integer fields.** A list encoded with `varint`, `Elias gamma`, `Elias omega`,
    `Golomb`, `Rice`, `StreamVByte`, or `VByte` MUST be decoded for exactly the number of integers
-   implied by the header, and MUST consume no more bytes than remain in its owning `compressed_*_len`
-   field. Decoding stops at the count, not at the end of the range. (`none` is not a valid integer
+   in the list (as listed in rule 1), and MUST consume no more bytes than remain in its owning
+   `compressed_*_len` field. Decoding stops at the count, not at the end of the range. (`none` is not a valid integer
    strategy: `0x00` is excluded from integer positions — see
    [Integer Encoding Methods](#integer-encoding-methods).)
 3. **`bits` fields.** A `bits` field always occupies `8 * ceil(n / 64)` bytes, where `n` is the number of
@@ -480,8 +494,10 @@ once, at the position of its absolute values.
 5. **`cigar strings` fields.** For decomposition `0x00` the payload is the `record_num` CIGAR entries, each
    followed by `\n`, so splitting on `\n` and dropping the trailing empty piece yields exactly `record_num`
    entries. Decomposition `0x02` is the same buffer, compressed as one blob with a leading `varint` blob
-   length. Decomposition `0x01` starts with a `varint` cigar count, followed by two self-delimiting integer
-   lists, and its packed operations occupy the rest of the field. See
+   length. Decomposition `0x01` starts with a `varint` cigar count, followed by two integer lists (the
+   operation counts, then the operation lengths, sized by rules 1 and 2), and its packed operations occupy
+   the rest of the field with no blob length. A `0x01` field is therefore **not self-delimiting**: its end
+   is known only from its `compressed_*_cigars_len` field. See
    [CIGAR 4-byte Strategy Code Details](encoding_algorithms.md#cigar-4-byte-strategy-code-details).
 6. **No padding.** Fields are packed contiguously with no inter-field padding and no alignment padding.
 7. **Exact consumption.** Decoding the fields that a `compressed_*_len` field owns MUST consume exactly
@@ -516,12 +532,16 @@ Check 8 can only run once a field is decoded, and MUST run then:
    [Integer Validation Rules](encoding_algorithms.md#integer-validation-rules).
 6. **Arithmetic overflow.** Products, sums and roundings derived from header fields — `n * 2`, `n * 4`,
    `n * 8`, `8 * ceil(n / 64)`, `ceil(n / 4)`, `16 * ceil(n / 64)`, and dictionary `N + 1` — MUST be computed
-   with overflow checking. On overflow the reader MUST reject the field; it MUST NOT wrap around.
+   with overflow checking. An overflow is a fatal error; the reader MUST NOT wrap around.
 7. **Per-method validation.** Each method additionally carries its own MUST-level validation rules, such as
    Kraft's equality for a Huffman codebook and the position and count checks for 2-bit DNA exceptions. See
    [encoding_algorithms.md](encoding_algorithms.md).
-8. **Uncompressed lengths.** Every `uncompressed_*_len` field is redundant with the decoded data, and a
-   reader MUST check it once the field is decoded: a mismatch is a fatal error. The expected values are
+8. **Uncompressed lengths.** The `uncompressed_*_len` fields are necessary, not redundant:
+   `uncompressed_walk_len` and `uncompressed_paths_len` give the number of `walks_segments` values and the
+   size of the `bits` fields of the `walks` type, so they are used to lay out the payload before it is
+   decoded (checks 3 and 6 apply to them), and the other `uncompressed_*_len` fields let a reader size its
+   buffers before decoding (check 4). Once a field is decoded, a reader MUST check that its
+   `uncompressed_*_len` field matches the decoded data: a mismatch is a fatal error. The expected values are
    stated with each header field. For a `strings` field it is the sum of the string lengths,
    `sum(end[i] - start[i])` (equivalently, the sum of the dictionary entry lengths of the strings, for
    Dictionary); for a `cigar strings` field it is the sum of the byte lengths of the stored entries; in
@@ -539,7 +559,9 @@ bytes.
 **Block ordering constraints:**
 
 - Blocks of the same type are not required to be contiguous
-- Different section types can appear in any order relative to each other.
+- Different section types can appear in any order relative to each other, except that a block MUST come
+  after every Segments block defining a segment ID it references (no forward references, see
+  [Segments Block](#segments-block)).
 
 **Endianness:** All multi-byte integer fields (`uint16`, `uint32`, `uint64`) are encoded in little-endian format, i.e. the least significant byte comes first. For example, the `uint32` value `0x12345678` is stored as the four bytes `78 56 34 12`, and the `uint16` value `0x0102` as the two bytes `02 01`. Strategy codes and other byte sequences have no endianness considerations as they are simple sequences of bytes.
 
@@ -742,7 +764,7 @@ Used for the second byte of a 2-byte `strings` code and for `SS` in a
 | `0x02` | gzip                 | one gzip member (RFC 1952)                                                                              |
 | `0x03` | lzma                 | one `.xz` stream                                                                                        |
 | `0x04` | Huffman              | nibble-level, 16-symbol codebook                                                                        |
-| `0x05` | 2-bit                | 2-bit DNA/RNA                                                                                           |
+| `0x05` | 2-bit                | 2-bit DNA                                                                                               |
 | `0x06` | —                    | **reserved**, see [Reserved: Arithmetic Coding](encoding_algorithms.md#reserved-arithmetic-coding-0x06) |
 | `0x07` | bzip2                | bzip2                                                                                                   |
 | `0x08` | RLE                  | hybrid raw/run-length                                                                                   |
@@ -976,10 +998,11 @@ which includes the reserved code `0x06`.
 - MUST set reserved fields to 0
 - MUST NOT write empty blocks (blocks with `record_num = 0`). If a block type has no records, omit the block entirely.
 - MUST NOT write an empty segment name or an empty `sample_id`
-- MUST NOT write segment IDs that are not defined by some Segments block in the same file
-- MUST NOT write a Walks `sequence_id` that is not defined by some Segments block in the same file. A
+- MUST NOT write a segment ID that is not defined by a Segments block preceding the block that uses it
+- MUST NOT write a Walks `sequence_id` that is not defined by a Segments block preceding the Walks block. A
   writer converting a GFA file whose `W` record names a sequence that is not present as a segment name in
-  the same GFA file MUST first emit that sequence as a segment record, or drop the walk
+  the same GFA file MUST first emit that sequence as a segment record, in a Segments block written before
+  the Walks block, or drop the walk
 
 **Error handling:**
 
@@ -987,11 +1010,11 @@ which includes the reserved code `0x06`.
 - A reader encountering an unknown strategy code MUST treat it as a fatal error.
 - A reader encountering a `version` larger than the highest supported version MUST treat it as a fatal error.
 - A reader encountering truncated or corrupted data MUST treat it as a fatal error.
-- A reader resolving a segment ID, including a Walks `sequence_id`, to a segment name that no Segments block
-  defines MUST treat it as a fatal error, and MUST NOT substitute a placeholder or a default name. This
-  applies once the whole file has been read, since the defining block MAY appear later in the file; a reader
-  that does not resolve IDs at all is not required to perform the check, as set out in
-  [Segments Block](#segments-block).
+- A reader resolving a segment ID, including a Walks `sequence_id`, to a segment name that no preceding
+  Segments block defines MUST treat it as a fatal error, and MUST NOT substitute a placeholder or a default
+  name. Since forward references are not allowed, the check can be performed as soon as the referencing
+  block is read; a reader that does not resolve IDs at all is not required to perform the check, as set out
+  in [Segments Block](#segments-block).
 
 ## Known Limitations of Version 1
 

@@ -5,8 +5,9 @@ It covers integer encoding, string encoding, and specialized encodings used in b
 
 **Normative keywords.** `MUST`, `MUST NOT`, `SHOULD` and `MAY` are to be interpreted as in RFC 2119.
 Every statement about what a writer or a reader does is normative; prose that is only explanatory is
-marked as such. "Fatal error" always means the same thing: the reader MUST reject the field or the whole
-file and MUST NOT continue, as detailed in [Reader Requirements](gfa_binary_format.md#reader-requirements).
+marked as such. "Fatal error" always means the same thing: the reader MUST reject the whole file and MUST
+NOT continue, as detailed in [Reader Requirements](gfa_binary_format.md#reader-requirements). Wherever this
+document says that a reader rejects a field, it rejects the whole file.
 
 ## Table of Contents
 
@@ -63,7 +64,9 @@ minimize the overall length (e.g., by overlapping common suffixes/prefixes). The
 `start = [0, 2, 4]` and `end = [3, 5, 6]`: `superstring[0:3]` is `ACG`, `superstring[2:5]` is `GTT` (it
 overlaps the first string), and `superstring[4:6]` is `TA`. The last `end` equals the superstring length.
 
-**Note: Strings are never concatenated directly; all string sets are encoded via this superstring approach.**
+**Note: In the superstring layout, strings are never concatenated directly; every `strings` field is encoded
+via this superstring approach, except a field using the [Dictionary](#dictionary-encoding-0x0a) method,
+which replaces the superstring layout.**
 
 The superstring is then encoded using the string encoding strategy.
 
@@ -107,7 +110,8 @@ that it is **not** the length of the superstring, which may be shorter because o
 Every `strings` field ends with a blob, which holds the compressed form of the superstring. A decoder cannot
 use the block's `compressed_*_len` field to find the end of the blob, because the superstring positions are
 decoded *before* the blob and some methods (Huffman, 2-bit DNA) cannot be decoded "until the bytes run out".
-Two rules therefore make every blob self-delimiting.
+The leading blob length makes every blob self-delimiting (rule 4 of the size rules in
+[Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)); the two rules below define it.
 
 **Rule 1 — the outer blob length is a byte count.** The first thing in a blob is a `varint` holding the
 **number of bytes of method-specific data that follow it**.
@@ -123,12 +127,16 @@ consumes exactly that many bytes of method-specific data, whatever the method.
 
 The `blob length` bytes themselves are not counted in the blob length.
 
-**Rule 2 — method data is self-delimiting.** Method-specific data starts at its first byte and its
-description takes a decoder exactly to its last byte, without needing the blob length as a stopping
-condition. Methods whose decoded size cannot be recovered from their own framing (Huffman, 2-bit DNA)
-therefore carry an explicit **decoded item count** inside their method data, defined in their own section.
-That count is an internal property of those two methods; it is not the outer blob length, and the two MUST
-NOT be confused.
+**Rule 2 — method data stays within the blob length.** Method-specific data starts at its first byte and
+MUST end exactly where the blob length says. For `none` (`0x00`) the blob length is the only thing that
+gives the extent of the method data. Every other method also has its own framing that takes a decoder
+exactly to the last byte of its method data, because that data is sometimes decoded where no blob length is
+available: the Huffman data of each block inside [BWT + Huffman](#bwt--huffman-0x09), and the packed
+operations of a CIGAR `numOperations` decomposition (see
+[CIGAR 4-byte Strategy Code Details](#cigar-4-byte-strategy-code-details)). Methods whose decoded size
+cannot be recovered from their own framing (Huffman, 2-bit DNA) therefore carry an explicit **decoded item
+count** inside their method data, defined in their own section. That count is an internal property of those
+two methods; it is not the outer blob length, and the two MUST NOT be confused.
 
 **Validation.** A reader MUST reject a field as a fatal error if the `blob length` is larger than the number
 of bytes remaining in the owning `compressed_*_len` field, or if decoding the method data does not consume
@@ -136,14 +144,17 @@ exactly `blob length` bytes. For a `strings` field, the blob is the last part of
 MUST also end exactly at the end of the owning `compressed_*_len` field (rule 7 of the size rules in
 [Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)).
 
-**Note on redundancy.** For the container methods (`none`, zstd, gzip, lzma, bzip2) the blob length is
-redundant, because the decoder could equally stop when the superstring is complete. It is nonetheless
-mandatory, so that there is exactly one framing rule for every method and one place where a decoder bounds
-its reads. This costs 1 byte per `strings` field.
+**Note on redundancy.** For the container methods (zstd, gzip, lzma, bzip2) the blob length is redundant,
+because the compressed stream has its own end marker. It is nonetheless mandatory, so that there is exactly
+one framing rule for every method and one place where a decoder bounds its reads. For `none` it is not
+redundant, as stated in rule 2. The blob length costs at least 1 byte per `strings` field (1 byte for a
+method data shorter than 128 bytes, more for longer ones, as for every varint).
 
 **Exception — Dictionary.** The Dictionary method (`0x0A`) *replaces* this layout entirely: a `strings`
 field with `LL = 0x0A` has no start/end positions and no outer blob length. See
-[Dictionary Encoding](#dictionary-encoding-0x0a).
+[Dictionary Encoding](#dictionary-encoding-0x0a). This exception applies only to `strings` fields: a CIGAR
+`string` decomposition (`DD = 0x02`) always has its outer blob length, even when `SS = 0x0A` (rule 5 of the
+size rules in [Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)).
 
 ## Integer Encoding Algorithms
 
@@ -156,7 +167,8 @@ A list of signed integers is encoded by two parts:
 
 The signs are considered a sequence of bits, where + is encoded as 0 and - is encoded with 1.
 The i-th bit in the sign `bits` field corresponds to the sign of the i-th integer in the list.
-Zero values are treated as positive (sign bit 0).
+A value whose absolute value is 0 may be stored with either sign bit: a writer MAY write 0 or 1, and a
+reader MUST accept both and decode the value as 0.
 
 The sign bits form a `bits` field of exactly as many bits as there are integers in the field, packed per
 [Packed Bits](gfa_binary_format.md#packed-bits). Its size is therefore `8 * ceil(n / 64)` bytes, where `n`
@@ -295,9 +307,12 @@ significant bit first, and the resulting stream is packed LSB-first (see
 `code`, then replace `n` with `bit_width(n) - 1`, i.e. `floor(log2(n))`. When `n` reaches 1 the loop
 stops and `code` is complete.
 
-Equivalently, written outermost first: `n` in binary, then `floor(log2(n))` in binary, then
-`floor(log2(floor(log2(n))))` in binary, and so on down to `1`, followed by one terminating `0` bit.
-**The leading `1` of each binary form is written**; nothing is stripped.
+Equivalently, in the order the groups appear in the stream: the innermost group comes first and `n` itself
+comes last. The groups are the binary forms of the values `n`, `floor(log2(n))`,
+`floor(log2(floor(log2(n))))`, ..., computed until the value reaches 1; the final `1` is **not** written.
+They are written from the last computed value back to `n`, followed by one terminating `0` bit. **The
+leading `1` of each binary form is written**; nothing is stripped. For `n = 5` the values are `5`, `2`, `1`,
+so the stream is `10` (for 2), then `101` (for 5), then `0`.
 
 **Decoding.** Set `current = 1`, then repeat:
 
@@ -421,6 +436,9 @@ Variable Byte encoding uses 7 bits per byte for data, with the high bit as the c
 - Little-endian ordering (least significant group first), identical to [Varint](#varint-0x01). `VByte` and
   `varint` are the same encoding on the wire; they exist as separate codes so that a field can declare
   which one it uses.
+- **Canonical form.** The canonical-form rules of [Varint](#varint-0x01) apply to VByte unchanged: a writer
+  MUST use the shortest encoding, and a reader MUST reject as a fatal error a VByte value longer than 10
+  bytes, a value of `2^64` or more, and a multi-byte value whose last byte is `0x00`.
 
 ### Fixed32 (0x0A)
 
@@ -650,7 +668,7 @@ which their bits are laid into bytes follows the general rule.
 
 ### 2-bit DNA Encoding (0x05)
 
-2-bit DNA encoding provides optimal compression for DNA/RNA sequences by encoding each nucleotide in 2 bits instead of 8 bits (75% size reduction). This is the most impactful encoding for pangenome data where sequences typically comprise 70-80% of file content.
+2-bit DNA encoding provides optimal compression for DNA sequences by encoding each nucleotide in 2 bits instead of 8 bits (75% size reduction). This is the most impactful encoding for pangenome data where sequences typically comprise 70-80% of file content.
 
 **Nucleotide Mapping:**
 
@@ -660,13 +678,16 @@ which their bits are laid into bytes follows the general rule.
 - T = 11
 
 Only the four uppercase bytes `A`, `C`, `G` and `T` are stored in `packed_bases`. Every other byte —
-lowercase letters, `U`, ambiguity codes, or anything else — MUST be stored in the exception table, so the
+lowercase letters, ambiguity codes, or anything else — MUST be stored in the exception table, so the
 method is lossless on any byte buffer.
 
 **Bit packing:** Nucleotides are packed LSB-first, like every other bit stream in BGFA (see
-[Conventions](gfa_binary_format.md#conventions)). The first nucleotide is stored in bits 1-0 of the first
-byte, the second in bits 3-2, the third in bits 5-4, the fourth in bits 7-6. Subsequent nucleotides continue
-in subsequent bytes.
+[Conventions](gfa_binary_format.md#conventions)). Each 2-bit code is a 2-bit codeword written **high bit
+first** into the stream, exactly as Huffman codes are: nucleotide `j` occupies stream bits `2j` (its high
+bit) and `2j + 1` (its low bit). The first nucleotide therefore occupies bits 0-1 of the first byte, with
+its high bit in bit 0, the second bits 2-3, the third bits 4-5, the fourth bits 6-7. Subsequent nucleotides
+continue in subsequent bytes. Note that this is **not** the common layout that stores the numeric value of
+the code in bits `2j+1..2j`, which would give `0xE4` for `ACGT` instead of `0xD8`.
 
 **Example:** Sequence "ACGT" (4 nucleotides):
 
@@ -716,22 +737,21 @@ positions of that same sequence rather than adding to it. So the decoder always 
 **Exception Handling:**
 Every byte of the superstring other than `A`, `C`, `G` and `T` is stored in the exception table with its
 original value, which makes reconstruction exact. A writer MUST NOT store `A`, `C`, `G` or `T` as an
-exception character, and a reader MUST treat one as a fatal error, so that the encoding of a given buffer
-is unique.
+exception character, and a reader MUST treat one as a fatal error.
 
 An exception position unambiguously identifies a **character** of the decoded sequence, not a byte or a
 nibble of the packed stream, so no additional high/low-nibble selector is needed: the decoder expands
 `packed_bases` into the nucleotide sequence and then overwrites position `p` of that sequence with the
 corresponding exception character.
 
-**Case is preserved.** Lowercase `acgt` and RNA `U`/`u` are exceptions like any other byte, so `acgt` decodes
+**Case is preserved.** Lowercase `acgt` are exceptions like any other byte, so `acgt` decodes
 to `acgt`. This keeps soft-masked sequences intact, at the cost of compression on them; a writer that
 expects many such bytes SHOULD pick another method.
 
 **Empty sequences:** a nucleotide sequence of length 0 is encoded as `nucleotide_count = 0`, a flags byte
 of `0x00`, no `packed_bases` bytes, and no exception table, i.e. 2 bytes of method data.
 
-**Expected Compression (informative):** 75% reduction on pure DNA/RNA sequences, slightly less with ambiguity codes.
+**Expected Compression (informative):** 75% reduction on pure DNA sequences, slightly less with ambiguity codes.
 
 **Primary Use Case:** Segment sequences, which are typically the largest data component in BGFA files.
 
@@ -839,7 +859,9 @@ result is the superstring.
 or above 65536, if a block other than the last has a size other than 65536, if a primary index is not below
 that block's size, if `symbol_count` is not `2 * n`, if the Huffman data fails any check of
 [Huffman Coding](#huffman-coding-0x04-0xf4), if a block overruns the method data, or if the block count is
-so large that the per-block minimum of 43 bytes (`4 + 4 + 2 + 32 + 1`) would overrun the method data.
+so large that the per-block minimum of 44 bytes (`4 + 4 + 2 + 32 + 1 + 1`: primary index, block size,
+`codebook_len`, codebook, a 1-byte `symbol_count` and at least 1 byte of bitstream) would overrun the method
+data.
 All of these checks MUST be performed before allocating, because the block count is attacker-controlled.
 
 **Empty and uniform buffers.** A block always holds at least one byte, so the empty buffer cannot be encoded
@@ -962,10 +984,10 @@ Four components are encoded, in this order:
 4. The operations as a single packed buffer, encoded with `SS`. See
    [Packed Operations String](#packed-operations-string)
 
-Component 1 makes components 2 and 3 self-delimiting: a decoder knows how many operation counts and how many
-lengths follow. Component 4 has **no** blob length: its method data occupies the rest of the owning
-`compressed_*_cigars_len` field, exactly. With `SS = 0x00` its length MUST be `ceil(T / 2)` bytes, where `T`
-is the total number of operations.
+Component 1 tells a decoder how many operation counts follow, and the decoded counts tell it how many
+lengths follow. The field as a whole is **not** self-delimiting: component 4 has **no** blob length, and its
+method data occupies the rest of the owning `compressed_*_cigars_len` field, exactly. With `SS = 0x00` its
+length MUST be `ceil(T / 2)` bytes, where `T` is the total number of operations.
 
 A decoder rebuilds each entry by writing, for each of its operations, the length in decimal (no leading
 zeros) followed by the operation letter.

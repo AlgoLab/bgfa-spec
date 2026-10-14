@@ -135,10 +135,12 @@ For implementation details of each encoding method, see [encoding_algorithms.md]
 
 **Content of `header_text`.** `header_text` holds the tags of all GFA `H` lines, in file order, without the
 leading `H` record type and its TAB, joined by a single TAB (`0x09`). For example, the two lines
-`H<TAB>VN:Z:1.2` and `H<TAB>TS:i:100` give `VN:Z:1.2<TAB>TS:i:100`. A file with no `H` line has `header_len = 0`. The
-text MUST NOT contain `0x00` or `0x0A`. A reader MUST treat a terminator byte other than `0x00` as a fatal
-error. A reader that re-emits GFA writes the tags back as a single `H` line, so the split of the tags across
-several `H` lines is not preserved.
+`H<TAB>VN:Z:1.2` and `H<TAB>TS:i:100` give `VN:Z:1.2<TAB>TS:i:100`.
+A file with no H line has header_len = 0, and conversely a writer MUST NOT write header_len = 0 for a GFA file that
+has an H line. The text MUST NOT contain 0x00 or 0x0A. A reader MUST treat a terminator byte other than 0x00 as a
+fatal error. A reader that re-emits GFA writes the tags back as a single H line, so the split of the tags across
+several H lines is not preserved. When header_len = 0, a reader that re-emits GFA MUST NOT write any H line, so a
+GFA file without H lines round-trips without one.
 
 **Note:** The magic number 0x41464742 corresponds to ASCII "BGFA" when read as little-endian bytes: 0x42='B', 0x47='G', 0x46='F', 0x41='A'.
 
@@ -306,8 +308,10 @@ its number of oriented segment occurrences, i.e. its number of elements in the `
 
 **CIGAR strings:** there are exactly `record_num` entries in `paths_cigar_strings`, one per path, holding the
 `Overlaps` field of the GFA `P` line. A path MAY carry **several** CIGARs, which MUST be separated by `,`
-within a single entry (the GFA convention). A path whose `Overlaps` field is `*` has the empty string as its
+within a single entry (the GFA convention).
+A path whose `Overlaps` field is `*` has the empty string as its
 entry. A single `,`-separated entry MUST NOT be split across several entries.
+A writer MUST treat a P line with no Overlaps column (not valid GFA 1.2, but common in practice) exactly as if the field were *. A reader that re-emits GFA writes * for an empty entry, so such a line comes back with an explicit *.
 
 The number of CIGARs in an entry is **not** checked against the number of segments of the path: a reader
 MUST NOT reject an entry because it does not hold one CIGAR per pair of consecutive segments.
@@ -470,6 +474,7 @@ once, at the position of its absolute values.
 
    For a `uints-delta` field this fixed-width size applies to the absolute values of the deltas; the
    sign bits are a separate `bits` field covered by rule 3.
+
 2. **Self-delimiting integer fields.** A list encoded with `varint`, `Elias gamma`, `Elias omega`,
    `Golomb`, `Rice`, `StreamVByte`, or `VByte` MUST be decoded for exactly the number of integers
    in the list (as listed in rule 1), and MUST consume no more bytes than remain in its owning

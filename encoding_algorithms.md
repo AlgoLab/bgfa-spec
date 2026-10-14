@@ -109,7 +109,7 @@ that it is **not** the length of the superstring, which may be shorter because o
 
 Every `strings` field ends with a blob, which holds the compressed form of the superstring. A decoder cannot
 use the block's `compressed_*_len` field to find the end of the blob, because the superstring positions are
-decoded *before* the blob and some methods (Huffman, 2-bit DNA) cannot be decoded "until the bytes run out".
+decoded _before_ the blob and some methods (Huffman, 2-bit DNA) cannot be decoded "until the bytes run out".
 The leading blob length makes every blob self-delimiting (rule 4 of the size rules in
 [Payload Byte Layouts](gfa_binary_format.md#payload-byte-layouts)); the two rules below define it.
 
@@ -118,7 +118,7 @@ The leading blob length makes every blob self-delimiting (rule 4 of the size rul
 
 > The blob length is **always** expressed as a number of **bytes**, for **every** method, without exception.
 
-It is *not* a decoded length, *not* a symbol count, and *not* a nucleotide count. After reading it, a decoder
+It is _not_ a decoded length, _not_ a symbol count, and _not_ a nucleotide count. After reading it, a decoder
 consumes exactly that many bytes of method-specific data, whatever the method.
 
 ```
@@ -150,7 +150,7 @@ one framing rule for every method and one place where a decoder bounds its reads
 redundant, as stated in rule 2. The blob length costs at least 1 byte per `strings` field (1 byte for a
 method data shorter than 128 bytes, more for longer ones, as for every varint).
 
-**Exception — Dictionary.** The Dictionary method (`0x0A`) *replaces* this layout entirely: a `strings`
+**Exception — Dictionary.** The Dictionary method (`0x0A`) _replaces_ this layout entirely: a `strings`
 field with `LL = 0x0A` has no start/end positions and no outer blob length. See
 [Dictionary Encoding](#dictionary-encoding-0x0a). This exception applies only to `strings` fields: a CIGAR
 `string` decomposition (`DD = 0x02`) always has its outer blob length, even when `SS = 0x0A` (rule 5 of the
@@ -219,7 +219,7 @@ The encodings of unsigned ints are the following.
 
 ### Integer Method: None (0x00)
 
-**Code `0x00` is reserved in an integer position and MUST NOT be used there.** It is a valid *string*
+**Code `0x00` is reserved in an integer position and MUST NOT be used there.** It is a valid _string_
 method (see [None / Identity (0x00)](#none--identity-0x00)) and it is the byte a strategy code carries in
 the string position of a `strings` field, but an integer list of a known count has no element width, so
 `0x00` has no meaning for it.
@@ -267,9 +267,8 @@ Elias gamma**, so a generic gamma implementation produces compatible codewords.
 **Format:**
 
 - Let `L = floor(log2(n)) + 1`, the number of bits in the binary form of `n`.
-- Write `L - 1` zero bits followed by a single one bit. This is the terminator the decoder needs, so gamma
-  is self-delimiting.
-- Write the `L` bits of `n` in binary, most significant bit first. The leading bit is always 1.
+- Write L - 1 zero bits.
+- Write the L bits of n in binary, most significant bit first. Their leading bit is always 1 and is the terminator the decoder needs, so gamma is self-delimiting.
 
 **Example:** n = 5
 
@@ -402,13 +401,14 @@ its group's data and uses the widths 1, 2 and 4 only, as defined below.
 - Control byte bits `2*i` and `2*i + 1` select the width of the `i`-th integer of the group:
 
   | bit `2*i` | bit `2*i + 1` | width of integer `i` |
-  | -------- | ------------- | ------------------- |
-  | 0        | 0             | 1 byte              |
-  | 1        | 0             | 2 bytes             |
-  | 0        | 1             | 4 bytes             |
-  | 1        | 1             | invalid             |
+  | --------- | ------------- | -------------------- |
+  | 0         | 0             | 1 byte               |
+  | 1         | 0             | 2 bytes              |
+  | 0         | 1             | 4 bytes              |
+  | 1         | 1             | invalid              |
 
   A writer MUST NOT emit the combination `1 1`, and a reader MUST treat it as a fatal error.
+
 - Each integer is stored little-endian in its width.
 - A writer MUST use the smallest width that can represent the value: below 256 always 1 byte, below
   65536 always 2 bytes, otherwise 4 bytes. A reader MUST reject as a fatal error a value stored in a width
@@ -520,19 +520,19 @@ not known before decompression. A reader MUST bound it by the decoded-size cap o
 
 The two Huffman codes share one wire format and differ only in alphabet size:
 
-| Code  | Alphabet        | Codebook size              | Payload unit  |
-| ----- | --------------- | -------------------------- | ------------- |
-| `0x04`| 16 nibbles 0x0-0xF | 32 bytes (16 × `uint16`)   | one nibble    |
-| `0xF4`| 256 bytes 0x00-0xFF | 512 bytes (256 × `uint16`) | one byte      |
+| Code   | Alphabet            | Codebook size              | Payload unit |
+| ------ | ------------------- | -------------------------- | ------------ |
+| `0x04` | 16 nibbles 0x0-0xF  | 32 bytes (16 × `uint16`)   | one nibble   |
+| `0xF4` | 256 bytes 0x00-0xFF | 512 bytes (256 × `uint16`) | one byte     |
 
 The Huffman encoding of a string consists of:
 
-| Name               | Description                                            | Type     |
-| ------------------ | ------------------------------------------------------ | -------- |
-| `codebook_len`     | Length of the encoded codebook in bytes                | `uint16` |
-| `codebook`         | Bit-lengths, one little-endian `uint16` per alphabet symbol | `bytes`  |
-| `symbol_count`     | Number of symbols to decode (see below)                | `varint` |
-| `huffman_bitstream`| The encoded symbols, packed LSB-first, padded with zeros to a byte boundary | `bytes` |
+| Name                | Description                                                                 | Type     |
+| ------------------- | --------------------------------------------------------------------------- | -------- |
+| `codebook_len`      | Length of the encoded codebook in bytes                                     | `uint16` |
+| `codebook`          | Bit-lengths, one little-endian `uint16` per alphabet symbol                 | `bytes`  |
+| `symbol_count`      | Number of symbols to decode (see below)                                     | `varint` |
+| `huffman_bitstream` | The encoded symbols, packed LSB-first, padded with zeros to a byte boundary | `bytes`  |
 
 **Framing.** The blob is:
 
@@ -558,7 +558,7 @@ whatever this method was asked to encode:
 - for a CIGAR `string` decomposition, it is the newline-terminated CIGAR buffer.
 
 In every case `0x04` splits each byte of the buffer into a high and a low nibble in that order, per
-[Nibble-Level Processing](#nibble-level-processing); the CIGAR buffer is nibble-*packed* data, but it is
+[Nibble-Level Processing](#nibble-level-processing); the CIGAR buffer is nibble-_packed_ data, but it is
 still a byte buffer for the purposes of this method. For `0x04` a reader MUST treat an odd `symbol_count` as
 a fatal error.
 
@@ -1063,7 +1063,7 @@ The decoded buffer MUST be exactly `ceil(T / 2)` bytes long. A reader MUST rejec
 of any other length, a code in `0x9`..`0xE`, a `0xF` anywhere except the low nibble of the last byte when `T`
 is odd, and a low nibble of the last byte other than `0xF` when `T` is odd. When `T = 0` the buffer is empty.
 
-**Nibble order, not bit order.** The operations buffer is packed at *nibble* granularity, high nibble first,
+**Nibble order, not bit order.** The operations buffer is packed at _nibble_ granularity, high nibble first,
 so the LSB-first bit-packing rule of [Conventions](gfa_binary_format.md#conventions) does not apply to it:
 once built, the buffer is an ordinary byte buffer and is handed to `SS` unchanged.
 

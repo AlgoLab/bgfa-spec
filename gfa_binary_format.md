@@ -359,7 +359,7 @@ The following is the sequence of fields making up the payload layout.
 | ------------------- | ------------------------------------------------------ | ------------- | -------------------------------- |
 | `sample_ids`        | Sample IDs                                             | `strings`     | `compressed_sample_ids_len`      |
 | `haplotype_indices` | Haplotype indices                                      | `uints`       | `compressed_haplotype_len`       |
-| `sequence_ids`      | Walk sequence IDs                                      | `uints`       | `compressed_sequence_len`        |
+| `sequence_ids`      | Walk sequence IDs                                      | `strings`     | `compressed_sequence_len`        |
 | `start_positions`   | Start positions                                        | `uints-delta` | `compressed_positions_len` (1st) |
 | `end_positions`     | End positions                                          | `uints-delta` | `compressed_positions_len` (2nd) |
 | `walks`             | Walks, each walk is a sequence of oriented segment IDs | `walks`       | `compressed_walk_len`            |
